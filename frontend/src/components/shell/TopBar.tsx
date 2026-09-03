@@ -18,7 +18,7 @@ export function TopBar() {
   const simDate = "2026/05/20";
   return (
     <header className="topbar">
-      <div className="brand"><span className="ai">Ware</span><span>Twin</span><span className="brand-sub">Warehouse Digital Twin</span></div>
+      <div className="brand"><span className="ai">Ware</span><span>Twin</span><span className="brand-sub">Powered by Next Robotics</span></div>
       <span className={"badge-live " + (paused ? "paused" : mode === "WHATIF" ? "whatif" : "live")}>
         <span className="dot" style={{ background: "currentColor", width: 6, height: 6 }} />{paused ? "PAUSED" : mode === "WHATIF" ? "SIMULATION" : "LIVE"}
       </span>
@@ -40,6 +40,7 @@ export function TopBar() {
         <button className={"tb-btn" + (drawer === "scenarios" ? " on" : "")} onClick={() => setDrawer("scenarios")} title="Failure injection">{Icon.bolt}<span>Scenarios</span></button>
         <button className={"tb-btn" + (drawer === "ops" ? " on" : "")} onClick={() => setDrawer("ops")} title="AI Operations: KPI + explainable decisions">{Icon.brain}<span>AI Ops</span></button>
         <button className={"tb-btn" + (drawer === "whatif" ? " on" : "")} onClick={() => setDrawer("whatif")} title="What-if simulation: clone the twin, inject, compare KPI">{Icon.fork}<span>What-if</span></button>
+        <button className={"tb-btn" + (drawer === "roi" ? " on" : "")} onClick={() => setDrawer("roi")} title="ROI Calculator: project savings, payback, 3-year ROI">{Icon.chart}<span>ROI</span></button>
         <div className="vsep" />
         <button className="icon-btn" title="Audit log" onClick={() => setModal("audit")}>{Icon.bell}{unack > 0 && <span className="dot">{unack}</span>}</button>
         <button className="icon-btn" title={`Render quality: ${quality} (click to cycle)`} onClick={() => setQuality(quality === "low" ? "medium" : quality === "medium" ? "high" : "low")}>{Icon.gear}</button>

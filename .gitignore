@@ -24,3 +24,7 @@ docs/layout/layout_preview.png
 .idea/
 .DS_Store
 Thumbs.db
+
+# Docker certs (never commit TLS keys)
+certs/*.pem
+certs/*.key

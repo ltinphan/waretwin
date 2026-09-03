@@ -30,12 +30,14 @@ except Exception:
     pass
 from .ai import copilot as copilot_ai
 from .ai import vlm as vlm_ai
+from .ai.roi import calculate_roi, INDUSTRY_DEFAULTS
 from .db import TwinDB
 from .guard import MAX_BODY_BYTES, MAX_WS_MESSAGE_BYTES, client_key, limiter, origin_allowed
 from .schema import (ClearInjectionBody, ClientMessage, CopilotBody, NewTask, ScenarioInjection, SimControlBody, TwinState,
                      VlmObserveBody, WhatIfRequest)
 from .sim.engine import SimEngine, SIM
 from .sim.whatif import run_whatif
+from .sim.fleet_sizing import run_fleet_sizing
 from .sim.navgrid import load_layout
 
 log = logging.getLogger("twin")
@@ -557,3 +559,28 @@ async def post_sim(body: SimControlBody, request: Request) -> dict[str, Any]:
     elif body.action == "RESET": server.reset(body.seed)
     if body.speed is not None: server.speed = body.speed
     return health_payload()
+
+
+@app.get("/api/roi/defaults")
+def roi_defaults() -> dict[str, Any]:
+    """Industry default cost parameters for the ROI calculator UI."""
+    return INDUSTRY_DEFAULTS
+
+
+@app.post("/api/roi")
+async def post_roi(body: dict[str, Any], request: Request) -> dict[str, Any]:
+    """Calculate ROI from live simulation KPIs + editable cost parameters."""
+    throttle(request, "ai")
+    kpi = server.engine.state["kpi"]
+    return calculate_roi(kpi.model_dump() if hasattr(kpi, "model_dump") else kpi, body)
+
+
+@app.post("/api/fleet-sizing")
+async def post_fleet_sizing(body: dict[str, Any], request: Request) -> dict[str, Any]:
+    """Run fleet sizing analysis: test different robot counts to find optimal for target throughput."""
+    throttle(request, "whatif")
+    target = float(body.get("target_throughput", 10))
+    max_robots = int(body.get("max_robots", 40))
+    duration = int(body.get("duration_ticks", 600))
+    async with server._whatif_lock:
+        return await asyncio.to_thread(run_fleet_sizing, server.engine, target, max_robots, duration)

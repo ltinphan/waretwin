@@ -1,0 +1,32 @@
+# WareTwin — waretwin.tinrobotics.com
+# Usage: docker compose up -d --build
+# For environments without Docker bridge networking, use: docker compose up --build --network host
+services:
+  backend:
+    build: ./backend
+    environment:
+      TWIN_DB: /tmp/twin.db
+      TWIN_SEED: "42"
+      TWIN_CORS_ORIGINS: https://waretwin.tinrobotics.com
+      TWIN_TRUSTED_PROXIES: "1"
+    expose: ["8000"]
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_WS_URL: wss://waretwin.tinrobotics.com/ws
+    expose: ["80"]
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    depends_on: [backend, frontend]
+    restart: unless-stopped

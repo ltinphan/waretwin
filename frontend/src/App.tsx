@@ -10,6 +10,7 @@ import { ScenariosDrawer } from "./components/ops/ScenariosDrawer";
 import { OpsDrawer } from "./components/ops/OpsDrawer";
 import { Modals } from "./components/ops/Modals";
 import { WhatIfDrawer } from "./components/ops/WhatIfDrawer";
+import { RoiDrawer } from "./components/ops/RoiDrawer";
 
 /**
  * 版面以 1536×860 CSS px 為基準設計；視窗更小時整體等比縮小，確保所有面板完整可見
@@ -48,10 +49,10 @@ function NarrowScreenGate({ children }: { children: React.ReactNode }) {
   if (narrow && !dismissed) {
     return (
       <div className="narrow-gate">
-        <div className="brand"><span className="ai">Ware</span><span>Twin</span></div>
+        <div className="brand"><span className="ai">Ware</span><span>Twin</span><span className="brand-sub">Powered by Next Robotics</span></div>
         <h2>Designed for desktop</h2>
         <p>WareTwin is a 3D operations console that works best on screens ≥ 1280 px wide (it still runs, scaled down, from 1024 px). On a phone the interface would shrink to about a quarter of its size and become unreadable.</p>
-        <p>Open <b>ware-twin.vercel.app</b> on a laptop or desktop browser for the full experience.</p>
+        <p>Open on a laptop or desktop browser for the full experience — or contact <b>Next Robotics</b> for a live demo.</p>
         <button className="btn" onClick={() => setDismissed(true)}>Continue anyway</button>
       </div>
     );
@@ -88,6 +89,7 @@ function Console() {
       <ScenariosDrawer />
       <OpsDrawer />
       <WhatIfDrawer />
+      <RoiDrawer />
       <Modals />
       <Notice />
     </div>
