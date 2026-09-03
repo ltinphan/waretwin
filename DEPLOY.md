@@ -1,50 +1,51 @@
 # Deployment — waretwin.tinrobotics.com
 
-## Prerequisites
+## Architecture
 
-- Docker + Docker Compose on the host
-- TLS certs for `waretwin.tinrobotics.com` (Let's Encrypt or self-signed)
+```
+Internet → Cloudflare Tunnel (host) → waretwin-frontend:80 (React SPA)
+                                  → waretwin-backend:8000 (FastAPI + WebSocket)
+```
+
+Cloudflare Tunnel (`cloudflared`) runs on the **host** and handles TLS termination.
+Services join `hermes-net` (`root_hermes-net`) so the tunnel can route by container name.
 
 ## Quick start
 
 ```bash
-# 1. Get TLS certs
-mkdir -p certs
-# Option A: Let's Encrypt (on the host, with DNS pointing here)
-certbot certonly --standalone -d waretwin.tinrobotics.com
-cp /etc/letsencrypt/live/waretwin.tinrobotics.com/fullchain.pem certs/
-cp /etc/letsencrypt/live/waretwin.tinrobotics.com/privkey.pem certs/
-
-# Option B: self-signed (testing only)
-openssl req -x509 -newkey rsa:2048 -nodes -keyout certs/privkey.pem   -out certs/fullchain.pem -days 365 -subj "/CN=waretwin.tinrobotics.com"
-
-# 2. Build and launch
+# 1. Build and launch containers
+cd /output/waretwin
 docker compose up -d --build
 
-# 3. Verify
+# 2. Add tunnel route on the host
+# If a tunnel already exists (same one as papers.tinrobotics.com), add a new ingress:
+cloudflared tunnel route dns <tunnel-name> waretwin.tinrobotics.com
+
+# 3. Update ~/.cloudflared/config.yml on the host — add waretwin ingress:
+# ingress:
+#   - hostname: waretwin.tinrobotics.com
+#     service: http://waretwin-frontend:80
+#   - hostname: papers.tinrobotics.com
+#     service: http://robotics-hub-web:80
+#   - service: http_status:404
+
+# 4. Restart cloudflared on the host
+sudo systemctl restart cloudflared
+# or: cloudflared tunnel run <tunnel-name>
+
+# 5. Verify
 curl https://waretwin.tinrobotics.com/api/health
 ```
-
-## Architecture
-
-```
-Internet → nginx:443 (TLS) → frontend:80 (React SPA)
-                           → backend:8000 (FastAPI + WebSocket)
-```
-
-- **nginx** terminates TLS, routes `/` to frontend, `/ws` + `/api/` to backend
-- **frontend** container builds the React app (Vite) and serves it via its own nginx
-- **backend** container runs FastAPI (uvicorn) with the simulation engine
 
 ## Environment
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `TWIN_CORS_ORIGINS` | `https://waretwin.tinrobotics.com` | CORS whitelist |
-| `TWIN_TRUSTED_PROXIES` | `1` | Trust X-Forwarded-For from nginx |
-| `VITE_WS_URL` | `wss://waretwin.tinrobotics.com/ws` | WebSocket URL baked into frontend |
+| `TWIN_TRUSTED_PROXIES` | `1` | Trust X-Forwarded-For |
+| `VITE_WS_URL` | `wss://waretwin.tinrobotics.com/ws` | WebSocket URL (baked into frontend at build time) |
 
-To add an OpenAI key for live AI mode, add to `docker-compose.yml` backend env:
+To enable live AI mode, add to `docker-compose.yml` backend env:
 ```yaml
 OPENAI_API_KEY: sk-...
 ```
