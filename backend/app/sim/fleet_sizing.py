@@ -46,7 +46,15 @@ def _run_with_fleet(engine: SimEngine, num_robots: int, duration: int) -> dict[s
             counts[e["type"]] = counts.get(e["type"], 0) + 1
         clone.new_events = []
 
+    # force KPI recalculation after run (engine updates are periodic)
+    clone._update_kpi() if hasattr(clone, "_update_kpi") else None
+    # only count wait from active robots (exclude OFFLINE ones we set above)
+    active_wait = sum(r["stats"]["wait_ticks"] for r in S["robots"].values() if r.get("fsm") != "OFFLINE")
+    active_count = sum(1 for r in S["robots"].values() if r.get("fsm") != "OFFLINE")
     kpi = _window_kpi(clone, start_tick, start_completed, start_wait, start_energy, duration, counts)
+    # override avg_wait_s to only count active robots
+    if active_count > 0:
+        kpi["avg_wait_s"] = (active_wait - start_wait) / active_count / 10.0  # ticks→seconds at 10Hz
     return {
         "num_robots": num_robots,
         "throughput_per_min": kpi["throughput_per_min"],

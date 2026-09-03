@@ -18,7 +18,7 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import HTTPException, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter, ValidationError
@@ -579,8 +579,15 @@ async def post_roi(body: dict[str, Any], request: Request) -> dict[str, Any]:
 async def post_fleet_sizing(body: dict[str, Any], request: Request) -> dict[str, Any]:
     """Run fleet sizing analysis: test different robot counts to find optimal for target throughput."""
     throttle(request, "whatif")
-    target = float(body.get("target_throughput", 10))
-    max_robots = int(body.get("max_robots", 40))
-    duration = int(body.get("duration_ticks", 600))
+    try:
+        target = float(body.get("target_throughput", 10))
+        max_robots = int(body.get("max_robots", 40))
+        duration = int(body.get("duration_ticks", 600))
+    except (ValueError, TypeError) as e:
+        raise HTTPException(status_code=400, detail=f"Invalid parameter: {e}")
+    if target <= 0 or target > 100:
+        raise HTTPException(status_code=400, detail="target_throughput must be between 0 and 100")
+    if max_robots < 5 or max_robots > 100:
+        raise HTTPException(status_code=400, detail="max_robots must be between 5 and 100")
     async with server._whatif_lock:
         return await asyncio.to_thread(run_fleet_sizing, server.engine, target, max_robots, duration)

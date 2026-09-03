@@ -61,7 +61,7 @@ export function RoiDrawer() {
 
   useEffect(() => {
     if (!open || defaults) return;
-    fetch(`${API_URL}/api/roi/defaults`).then(r => r.json()).then(setDefaults).catch(() => {});
+    fetch(`${API_URL}/api/roi/defaults`).then(r => { if (!r.ok) throw new Error(`${r.status}`); return r.json(); }).then(setDefaults).catch((e) => setErr(`Failed to load defaults: ${e}`));
   }, [open, defaults]);
 
   // when industry changes, reset overrides to that industry's defaults

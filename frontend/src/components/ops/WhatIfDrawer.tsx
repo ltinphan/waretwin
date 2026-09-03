@@ -104,7 +104,7 @@ export function WhatIfDrawer() {
     setRunning(true); setErr(null); markWhatIfPending(request_id);
     wsSend({ type: "WHATIF_RUN", request_id, request: { scenario_name: name, injections: inj, duration_ticks: dur * 10, run_baseline: baseline } });
   };
-  const toggle = (id: string) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggle = (id: string) => { setIndustrySel(null); setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }); };
   const fmt = (k: string, v: number) => k === "on_time_rate" || k === "utilization" ? `${Math.round(v * 100)}%` : k === "congestion_index" ? `${Math.round(v * 100)}%` : Number.isInteger(v) ? String(v) : v.toFixed(1);
   const pctText = (k: string, b: number, s: number) => (k === "on_time_rate" || k === "utilization" || k === "congestion_index") ? `${((s - b) * 100).toFixed(0) === "0" ? "±0" : ((s - b) * 100 > 0 ? "+" : "") + ((s - b) * 100).toFixed(0)} pt` : b ? `${s - b > 0 ? "+" : ""}${(((s - b) / b) * 100).toFixed(0)}%` : "";
 

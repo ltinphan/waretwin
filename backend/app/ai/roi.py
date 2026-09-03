@@ -83,7 +83,7 @@ class RoiResult(BaseModel):
     annual_maintenance: float
     total_investment: float
     annual_net_savings: float
-    payback_months: float
+    payback_months: float | None
     three_year_roi_pct: float
     fte_reduced: int
     on_time_improvement_pct: float
@@ -130,7 +130,11 @@ def calculate_roi(kpi: dict[str, Any], overrides: dict[str, Any] | None = None) 
     annual_error_savings = (manual_errors - amr_errors) * p["error_cost_per_pick"]
 
     # energy cost (AMR fleet)
-    annual_energy = energy_kwh * (annual_hours / (daily_hours * p["working_days_yr"] / 365 * 365))  # scale daily→annual
+    # energy_kwh is cumulative since sim start; scale to daily rate then annualize
+    # ponytail: uses elapsed sim hours as denominator; if sim just started (0h), falls back to rated power estimate
+    sim_hours = max(annual_hours / p["working_days_yr"], 1)  # at least 1 day of sim time
+    daily_energy = energy_kwh / sim_hours * daily_hours if energy_kwh > 0 else num_robots * 0.5 * daily_hours  # 0.5 kW/robot fallback
+    annual_energy = daily_energy * p["working_days_yr"]
     annual_energy_cost = annual_energy * p["energy_cost_kwh"]
 
     # maintenance
