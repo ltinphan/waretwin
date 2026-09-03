@@ -57,8 +57,8 @@ interface Store {
   /** 點選的電梯（右欄顯示 Lift 面板；與 selectedRobot 互斥） */
   selectedLift: string | null;
   selectLift: (id: string | null) => void;
-  drawer: null | "scenarios" | "ops" | "whatif";
-  setDrawer: (d: null | "scenarios" | "ops" | "whatif") => void;
+  drawer: null | "scenarios" | "ops" | "whatif" | "roi";
+  setDrawer: (d: null | "scenarios" | "ops" | "whatif" | "roi") => void;
   /** 最近一次 What-if 結果（後端回傳，含 schema 外的 window 對照資料） */
   whatif: unknown | null;
   setWhatIf: (r: unknown | null) => void;

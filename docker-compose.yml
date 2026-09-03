@@ -1,0 +1,36 @@
+# WareTwin — waretwin.tinrobotics.com
+# Cloudflare Tunnel on host routes to this service via hermes-net.
+# Usage: docker compose up -d --build
+services:
+  backend:
+    container_name: waretwin-backend
+    build: ./backend
+    environment:
+      TWIN_DB: /tmp/twin.db
+      TWIN_SEED: "42"
+      TWIN_CORS_ORIGINS: https://waretwin.tinrobotics.com
+      TWIN_TRUSTED_PROXIES: "1"
+    restart: unless-stopped
+    networks:
+      - waretwin-net
+      - hermes-net
+
+  frontend:
+    container_name: waretwin-frontend
+    build:
+      context: ./frontend
+      args:
+        VITE_WS_URL: wss://waretwin.tinrobotics.com/ws
+    restart: unless-stopped
+    networks:
+      - waretwin-net
+      - hermes-net
+    depends_on: [backend]
+
+networks:
+  waretwin-net:
+    driver: bridge
+    name: waretwin-net
+  hermes-net:
+    external: true
+    name: root_hermes-net

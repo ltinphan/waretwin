@@ -32,6 +32,43 @@ const PRESETS: Array<{ id: string; label: string; demo: string; build: () => Sce
   { id: "lift1", label: "LIFT-1 fault (cross-floor via LIFT-2 only)", demo: "12", build: () => ({ kind: "LIFT_FAULT", lift_id: "LIFT-1" }) },
 ];
 
+// Industry-typical compound scenarios for CxO pitches
+// ponytail: 3 presets that tell a story — each maps to a real pain point the CxO recognizes
+const INDUSTRY_SCENARIOS: Array<{ id: string; label: string; industry: string; desc: string; injections: ScenarioInjection[] }> = [
+  {
+    id: "ecom-peak",
+    label: "E-commerce: Black Friday Peak",
+    industry: "ecommerce",
+    desc: "3× demand surge + 2 robot failures during peak hour — can the fleet still hit SLA?",
+    injections: [
+      { kind: "TASK_BURST", count: 20, priority: "HIGH" },
+      { kind: "ROBOT_FAILURE", robot_id: "R07" },
+      { kind: "ROBOT_FAILURE", robot_id: "R14" },
+    ],
+  },
+  {
+    id: "mfg-line",
+    label: "Manufacturing: Line Stoppage + Reroute",
+    industry: "manufacturing",
+    desc: "Conveyor failure forces reroute to backup station — throughput impact + recovery time",
+    injections: [
+      { kind: "CONVEYOR_FAILURE", conveyor_id: "CV03" },
+      { kind: "TRAFFIC_CONGESTION", zone_id: "D", level: 0.7, duration_ticks: 1800 },
+    ],
+  },
+  {
+    id: "3pl-safety",
+    label: "3PL: Safety Incident + Peak",
+    industry: "3pl",
+    desc: "Worker enters Zone A + camera blind spot + demand spike — safety system response",
+    injections: [
+      { kind: "HUMAN_INTRUSION", zone_id: "A", duration_ticks: 600 },
+      { kind: "CAMERA_OFFLINE", camera_id: "CAM-B03" },
+      { kind: "TASK_BURST", count: 15, priority: "NORMAL" },
+    ],
+  },
+];
+
 export function WhatIfDrawer() {
   const open = useStore((s) => s.drawer === "whatif");
   const setDrawer = useStore((s) => s.setDrawer);
@@ -39,6 +76,7 @@ export function WhatIfDrawer() {
   const result = useStore((s) => s.whatif) as WhatIfResultEx | null;
   const setResult = useStore((s) => s.setWhatIf);
   const [sel, setSel] = useState<Set<string>>(new Set(["r07"]));
+  const [industrySel, setIndustrySel] = useState<string | null>(null);
   const [dur, setDur] = useState(300);
   const [baseline, setBaseline] = useState(true);
   const [running, setRunning] = useState(false);
@@ -50,14 +88,23 @@ export function WhatIfDrawer() {
   useEffect(() => { if (!open) return; const h = (e: KeyboardEvent) => e.key === "Escape" && setDrawer(null); window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h); }, [open, setDrawer]);
   if (!open) return null;
 
-  const injections = () => PRESETS.filter((p) => sel.has(p.id)).map((p) => p.build());
+  const injections = () => {
+    if (industrySel) {
+      const scenario = INDUSTRY_SCENARIOS.find(s => s.id === industrySel);
+      return scenario ? scenario.injections : [];
+    }
+    return PRESETS.filter((p) => sel.has(p.id)).map((p) => p.build());
+  };
   const run = () => {
-    if (source !== "online" || sel.size === 0) return;
+    if (source !== "online") return;
+    const inj = injections();
+    if (inj.length === 0) return;
+    const name = industrySel ? INDUSTRY_SCENARIOS.find(s => s.id === industrySel)?.label ?? "industry" : PRESETS.filter((p) => sel.has(p.id)).map((p) => p.label).join(" + ");
     const request_id = `w${++seq.current}-${Date.now().toString(36)}`; pendingId.current = request_id;
     setRunning(true); setErr(null); markWhatIfPending(request_id);
-    wsSend({ type: "WHATIF_RUN", request_id, request: { scenario_name: PRESETS.filter((p) => sel.has(p.id)).map((p) => p.label).join(" + "), injections: injections(), duration_ticks: dur * 10, run_baseline: baseline } });
+    wsSend({ type: "WHATIF_RUN", request_id, request: { scenario_name: name, injections: inj, duration_ticks: dur * 10, run_baseline: baseline } });
   };
-  const toggle = (id: string) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggle = (id: string) => { setIndustrySel(null); setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }); };
   const fmt = (k: string, v: number) => k === "on_time_rate" || k === "utilization" ? `${Math.round(v * 100)}%` : k === "congestion_index" ? `${Math.round(v * 100)}%` : Number.isInteger(v) ? String(v) : v.toFixed(1);
   const pctText = (k: string, b: number, s: number) => (k === "on_time_rate" || k === "utilization" || k === "congestion_index") ? `${((s - b) * 100).toFixed(0) === "0" ? "±0" : ((s - b) * 100 > 0 ? "+" : "") + ((s - b) * 100).toFixed(0)} pt` : b ? `${s - b > 0 ? "+" : ""}${(((s - b) / b) * 100).toFixed(0)}%` : "";
 
@@ -74,12 +121,25 @@ export function WhatIfDrawer() {
             </label>
           ))}
         </div>
+
+        <h4 className="drawer-sub" style={{ marginTop: 12 }}>Industry Scenarios (CxO Presets)</h4>
+        <div className="wi-list">
+          {INDUSTRY_SCENARIOS.map((s) => (
+            <div key={s.id} className={"wi-item industry" + (industrySel === s.id ? " on" : "")} onClick={() => { setIndustrySel(s.id); setSel(new Set()); }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600 }}>{s.label}</div>
+                <div className="demo" style={{ display: "block", marginTop: 2 }}>{s.desc}</div>
+              </div>
+              {industrySel === s.id && <span style={{ color: "var(--accent)" }}>✓</span>}
+            </div>
+          ))}
+        </div>
         <div className="wi-ctl">
           <label>Duration
             <select value={dur} onChange={(e) => setDur(+e.target.value)}>{[60, 120, 180, 300, 600].map((d) => <option key={d} value={d}>{d >= 60 ? `${d / 60} min` : `${d} s`}</option>)}</select>
           </label>
           <label className="auto"><input type="checkbox" checked={baseline} onChange={(e) => setBaseline(e.target.checked)} /> compare with baseline</label>
-          <button className="btn primary" disabled={running || source !== "online" || sel.size === 0} onClick={run}>{running ? "Simulating…" : "RUN"}</button>
+          <button className="btn primary" disabled={running || source !== "online" || (sel.size === 0 && !industrySel)} onClick={run}>{running ? "Simulating…" : "RUN"}</button>
         </div>
         {source !== "online" && <div className="hint">What-if runs on the backend (clone of the live engine). Start the backend to enable.</div>}
         {err && <div className="form-err" style={{ marginTop: 6 }}>⚠ {err}</div>}
