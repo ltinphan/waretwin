@@ -141,12 +141,40 @@ class SimEngine:
 
     # ─────────────────────────────────────────────────────────
     def _initial_lifts(self) -> dict[str, Any]:
-        return {l["id"]: {
-            "id": l["id"], "state": "IDLE", "floor": 1, "target_floor": None, "y": 0.0,
-            "door_f1": "CLOSED", "door_f2": "CLOSED",
-            "occupant": None, "reserved_by": None, "queue": {"1": [], "2": []},
-            "until_tick": 0, "fault": False, "fault_remaining": 0, "trips": 0, "busy_ticks": 0, "wait_total_ticks": 0, "wait_n": 0,
-        } for l in self.layout.get("lifts", [])}
+        lifts = {}
+        for l in self.layout.get("lifts", []):
+            served = [str(f) for f in l.get("floors")] if l.get("floors") else ["1", "2"]
+            lifts[l["id"]] = {
+                "id": l["id"], "state": "IDLE", "floor": min(int(k) for k in served), "target_floor": None, "y": 0.0,
+                "door_f1": "CLOSED", "door_f2": "CLOSED", "door_state": {k: "CLOSED" for k in served},
+                "occupant": None, "reserved_by": None, "queue": {k: [] for k in served},
+                "until_tick": 0, "fault": False, "fault_remaining": 0, "trips": 0, "busy_ticks": 0, "wait_total_ticks": 0, "wait_n": 0, "y0": 0.0,
+            }
+        return lifts
+
+    @staticmethod
+    def _lift_queue_floors(lay: dict[str, Any], L: dict[str, Any]) -> list[str]:
+        """Queue keys this lift accepts — layout floors list when present, else the snapshot's existing keys."""
+        if lay.get("floors"):
+            return [str(f) for f in lay["floors"]]
+        return list(L["queue"].keys()) or ["1", "2"]
+
+    @staticmethod
+    def _open_lift_door(L: dict[str, Any], floor: int) -> None:
+        state = "OPEN"
+        if L.get("door_state") is None:
+            L["door_state"] = {}
+        L["door_state"][str(floor)] = state
+        if floor == 1: L["door_f1"] = state
+        elif floor == 2: L["door_f2"] = state
+
+    @staticmethod
+    def _close_lift_doors(L: dict[str, Any]) -> None:
+        if L.get("door_state") is None:
+            L["door_state"] = {}
+        for k in L["door_state"]:
+            L["door_state"][k] = "CLOSED"
+        L["door_f1"] = "CLOSED"; L["door_f2"] = "CLOSED"
 
     def _build_initial_state(self, seed: int) -> dict[str, Any]:
         L = self.layout
@@ -545,7 +573,7 @@ class SimEngine:
     def release_robot_from_lift(self, robot_id: str) -> None:
         S = self.state
         for lid, L in S["lifts"].items():
-            for f in ("1", "2"):
+            for f in L["queue"]:
                 if robot_id in L["queue"][f]:
                     L["queue"][f].remove(robot_id)
             if L["reserved_by"] == robot_id:
@@ -570,8 +598,8 @@ class SimEngine:
             if L["state"] in ("MOVING_UP", "MOVING_DOWN"):
                 t = min(1.0, max(0.0, 1 - (L["until_tick"] - tick) / SIM["LIFT_TRAVEL_TICKS"]))
                 e = t * t * (3 - 2 * t)
-                y0 = self._elev_of(1 if L["state"] == "MOVING_UP" else 2)
-                y1 = self._elev_of(2 if L["state"] == "MOVING_UP" else 1)
+                y0 = L.get("y0", self._elev_of(1))
+                y1 = self._elev_of(L["target_floor"]) if L["target_floor"] is not None else y0
                 L["y"] = y0 + (y1 - y0) * e
             elif L["floor"] is not None:
                 L["y"] = self._elev_of(L["floor"])
@@ -581,7 +609,7 @@ class SimEngine:
             if st == "IDLE":
                 if not L["reserved_by"]:
                     heads = []
-                    for f in ("1", "2"):
+                    for f in L["queue"]:
                         if L["queue"][f]:
                             rid = L["queue"][f][0]
                             heads.append((self.rt[rid].lift_enqueued_tick if rid in self.rt else 0, rid))
@@ -597,7 +625,8 @@ class SimEngine:
                         L["state"] = "DOOR_OPENING"; L["until_tick"] = tick + SIM["LIFT_DOOR_TICKS"]
                     else:
                         L["target_floor"] = rr["floor"]
-                        L["state"] = "MOVING_UP" if rr["floor"] == 2 else "MOVING_DOWN"
+                        L["state"] = "MOVING_UP" if rr["floor"] > L["floor"] else "MOVING_DOWN"
+                        L["y0"] = L["y"]
                         L["floor"] = None; L["until_tick"] = tick + SIM["LIFT_TRAVEL_TICKS"]
             elif st in ("MOVING_UP", "MOVING_DOWN"):
                 L["state"] = "LEVELING"; L["until_tick"] = tick + SIM["LIFT_LEVEL_TICKS"]
@@ -608,8 +637,7 @@ class SimEngine:
                 L["until_tick"] = tick + SIM["LIFT_DOOR_TICKS"]
                 self.emit("LIFT_ARRIVED", "LIFT", "INFO", f"{lid} arrived at Floor {L['floor']}")
             elif st == "DOOR_OPENING":
-                if L["floor"] == 1: L["door_f1"] = "OPEN"
-                else: L["door_f2"] = "OPEN"
+                self._open_lift_door(L, L["floor"])
                 L["state"] = "BOARDING"
                 self.emit("LIFT_GATE_OPENED", "LIFT", "LOW", f"{lid} Floor {L['floor']} gate opened")
             elif st == "BOARDING":
@@ -617,17 +645,18 @@ class SimEngine:
                 if not rr or rr["status"] == "OFFLINE":
                     if L["reserved_by"]:
                         self.release_robot_from_lift(L["reserved_by"])
-                    L["door_f1"] = "CLOSED"; L["door_f2"] = "CLOSED"
+                    self._close_lift_doors(L)
                     L["state"] = "COOLDOWN"; L["until_tick"] = tick + SIM["LIFT_COOLDOWN_TICKS"]
                     self.emit("LIFT_COOLDOWN_STARTED", "LIFT", "LOW", f"{lid} cooldown")
             elif st == "DOOR_CLOSING":
-                L["door_f1"] = "CLOSED"; L["door_f2"] = "CLOSED"
+                self._close_lift_doors(L)
                 if L["occupant"]:
                     rr = S["robots"][L["occupant"]]
                     rt = self.rt.get(L["occupant"])
                     dest = rt.pending["floor"] if rt and rt.pending else (2 if rr["floor"] == 1 else 1)
                     L["target_floor"] = dest
-                    L["state"] = "MOVING_UP" if dest == 2 else "MOVING_DOWN"
+                    L["state"] = "MOVING_UP" if dest > rr["floor"] else "MOVING_DOWN"
+                    L["y0"] = L["y"]
                     L["floor"] = None; L["until_tick"] = tick + SIM["LIFT_TRAVEL_TICKS"]
                     L["trips"] += 1
                     self.emit("LIFT_DEPARTED", "LIFT", "INFO", f"{lid} departed → Floor {dest} ({L['occupant']})", robot_id=L["occupant"])
@@ -635,12 +664,11 @@ class SimEngine:
                     L["state"] = "COOLDOWN"; L["until_tick"] = tick + SIM["LIFT_COOLDOWN_TICKS"]
                     self.emit("LIFT_COOLDOWN_STARTED", "LIFT", "LOW", f"{lid} cooldown")
             elif st == "DOOR_OPENING_AT_DESTINATION":
-                if L["floor"] == 1: L["door_f1"] = "OPEN"
-                else: L["door_f2"] = "OPEN"
+                self._open_lift_door(L, L["floor"])
                 L["state"] = "ALIGHTING"
                 self.emit("LIFT_GATE_OPENED", "LIFT", "LOW", f"{lid} Floor {L['floor']} gate opened")
             elif st == "DOOR_CLOSING_AFTER_EXIT":
-                L["door_f1"] = "CLOSED"; L["door_f2"] = "CLOSED"
+                self._close_lift_doors(L)
                 L["state"] = "COOLDOWN"; L["until_tick"] = tick + SIM["LIFT_COOLDOWN_TICKS"]
                 self.emit("LIFT_COOLDOWN_STARTED", "LIFT", "LOW", f"{lid} cooldown")
             elif st == "COOLDOWN":
@@ -951,8 +979,8 @@ class SimEngine:
         approach = math.hypot(r['position'][0] - (cx - 2), r['position'][2] - cz) / (SIM['MAX_SPEED'] * 0.8)
         # 預約者上車前仍留在 queue 裡，只有「不在任一 queue」（已離隊上車中）才額外 +1，避免重複計等待成本
         rb = L["reserved_by"]
-        reserved_extra = 1 if rb and rb not in L["queue"]["1"] and rb not in L["queue"]["2"] else 0
-        queue_len = len(L["queue"]["1"]) + len(L["queue"]["2"]) + reserved_extra
+        reserved_extra = 1 if rb and not any(rb in L["queue"][f] for f in L["queue"]) else 0
+        queue_len = sum(len(L["queue"][f]) for f in L["queue"]) + reserved_extra
         per_service = (SIM["LIFT_DOOR_TICKS"] * 4 + SIM["LIFT_TRAVEL_TICKS"] + SIM["LIFT_LEVEL_TICKS"] + SIM["LIFT_COOLDOWN_TICKS"] + 40) * SIM["TICK_S"]
         busy = 0 if L["state"] == "IDLE" else per_service * 0.5
         wrong_floor = SIM["LIFT_TRAVEL_TICKS"] * SIM["TICK_S"] if (L["floor"] is not None and L["floor"] != r["floor"]) else 0

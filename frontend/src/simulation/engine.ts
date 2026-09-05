@@ -12,7 +12,7 @@ import type { WarehouseLayout, LayoutLocation } from "../layout/types";
 import { buildNavGrid } from "../layout/navgrid";
 import type {
   TwinState, PerceivedObstacle, RobotState, TaskState, TwinEvent, AlertState, AiDecision, DecisionCandidate,
-  GridCell, RobotFsmState, RobotStatus, EventType, Severity, TaskPriority, ScenarioInjection,
+  GridCell, RobotFsmState, RobotStatus, EventType, Severity, TaskPriority, ScenarioInjection, LiftState, TaskType,
 } from "../schema/twin_state";
 import { THRESHOLDS } from "../schema/twin_state";
 import { astar, cellKey, cellCenter, isWalkable, nearestWalkable, toCell, type NavGrid } from "./astar";
@@ -196,7 +196,7 @@ export class SimEngine {
       if (r.lift_stage) {
         // 電梯行程：queue / occupant / reserved_by 本來就在 state.lifts 裡，這裡補回 pending 與子狀態
         let liftId = r.lift_id;
-        if (!liftId) for (const lid in S.lifts) { const L = S.lifts[lid]; if (L.occupant === rid || L.reserved_by === rid || L.queue["1"].includes(rid) || L.queue["2"].includes(rid)) { liftId = lid; break; } }
+        if (!liftId) for (const lid in S.lifts) { const L = S.lifts[lid]; if (L.occupant === rid || L.reserved_by === rid || Object.keys(L.queue).some((f) => L.queue[f].includes(rid))) { liftId = lid; break; } }
         const loc = r.destination ? this.loc[r.destination] : undefined;
         const chg = !loc && r.destination ? this.layout.charging_stations.find((c) => c.id === r.destination) : undefined;
         const goal = loc ? { point: [loc.access_point[0], loc.access_point[1]] as [number, number], floor: loc.floor ?? 1 }
@@ -236,9 +236,10 @@ export class SimEngine {
       sim: { tick: 0, tick_ms: THRESHOLDS.TICK_MS, speed: 1, mode: "LIVE", seed, baseline_snapshot_id: null },
       robots, tasks: {},
       lifts: Object.fromEntries((L.lifts ?? []).map((l) => [l.id, {
-        id: l.id, state: "IDLE" as const, floor: 1, target_floor: null, y: 0,
+        id: l.id, state: "IDLE" as const, floor: 1, target_floor: null, y: 0, y0: 0,
         door_f1: "CLOSED" as const, door_f2: "CLOSED" as const,
-        occupant: null, reserved_by: null, queue: { "1": [], "2": [] } as Record<string, string[]>,
+        door_state: Object.fromEntries(((l.floors as number[] | undefined) ?? [1, 2]).map((f) => [String(f), "CLOSED" as const])),
+        occupant: null, reserved_by: null, queue: Object.fromEntries(((l.floors as number[] | undefined) ?? [1, 2]).map((f) => [String(f), [] as string[]])),
         until_tick: 0, fault: false, fault_remaining: 0, trips: 0, busy_ticks: 0, wait_total_ticks: 0, wait_n: 0,
       }])),
       zones: Object.fromEntries(L.zones.map((z) => [z.id, { id: z.id, status: "NORMAL" as const, robot_count: 0, congestion: 0, blocked_reason: null, blocked_since_tick: null }])),
@@ -333,7 +334,7 @@ export class SimEngine {
     const pick = <T,>(a: T[]) => a[Math.floor(this.rng() * a.length)];
     // ponytail: guards pick() on empty operational categories (empty/custom layouts);
     // RNG call order is unchanged when every category is non-empty (demo parity).
-    const categories: Array<[Task["type"], typeof shelves, typeof shelves]> = [
+    const categories: Array<[TaskType, typeof shelves, typeof shelves]> = [
       ["PICK", shelves, packs],
       ["REPLENISH", inbound, shelves],
       ["TRANSPORT", packs, outbound],
@@ -531,12 +532,24 @@ export class SimEngine {
 
   private setLiftStage(r: RobotState, rt: RobotRt, stage: RobotRt["liftStage"]) { rt.liftStage = stage; r.lift_stage = stage; }
 
+  /** 開指定樓層的門（door_f1/f2 為相容保留欄位，>2 層請用 door_state） */
+  private openLiftDoor(L: LiftState, floor: number) {
+    L.door_state ??= {};
+    L.door_state[String(floor)] = "OPEN";
+    if (floor === 1) L.door_f1 = "OPEN"; else if (floor === 2) L.door_f2 = "OPEN";
+  }
+  private closeLiftDoors(L: LiftState) {
+    L.door_state ??= {};
+    for (const k of Object.keys(L.door_state)) L.door_state[k] = "CLOSED";
+    L.door_f1 = "CLOSED"; L.door_f2 = "CLOSED";
+  }
+
   /** 機器人從電梯流程中移除（故障重選 / 機器人離線 / 任務取消） */
   releaseRobotFromLift(robotId: string) {
     const S = this.state;
     for (const lid in S.lifts) {
       const L = S.lifts[lid];
-      for (const f of ["1", "2"]) { const i = L.queue[f].indexOf(robotId); if (i >= 0) L.queue[f].splice(i, 1); }
+      for (const f of Object.keys(L.queue)) { const i = L.queue[f].indexOf(robotId); if (i >= 0) L.queue[f].splice(i, 1); }
       if (L.reserved_by === robotId) { L.reserved_by = null; this.emit("LIFT_RESERVATION_RELEASED", "LIFT", "LOW", `${lid} reservation released (${robotId})`, { robot_id: robotId }); }
       if (L.occupant === robotId) { L.occupant = null; if (L.state === "BOARDING" || L.state === "ALIGHTING") { L.state = "DOOR_CLOSING_AFTER_EXIT"; L.until_tick = this.state.sim.tick + SIM.LIFT_DOOR_TICKS; } }
     }
@@ -555,16 +568,16 @@ export class SimEngine {
       if (L.state === "MOVING_UP" || L.state === "MOVING_DOWN") {
         const t = Math.min(1, Math.max(0, 1 - (L.until_tick - tick) / SIM.LIFT_TRAVEL_TICKS));
         const e = t * t * (3 - 2 * t);
-        const y0 = this.elevOf(L.state === "MOVING_UP" ? 1 : 2), y1 = this.elevOf(L.state === "MOVING_UP" ? 2 : 1);
+        const y0 = L.y0 ?? this.elevOf(1), y1 = L.target_floor !== null ? this.elevOf(L.target_floor) : y0;
         L.y = y0 + (y1 - y0) * e;
       } else if (L.floor !== null) L.y = this.elevOf(L.floor);
       if (tick < L.until_tick) continue;
       switch (L.state) {
         case "IDLE": {
-          // 排程：FIFO — 兩層 queue 各取隊首，比進入時間（先到先服務），同分取一樓
+          // 排程：FIFO — 各層 queue 各取隊首，比進入時間（先到先服務），同分取一樓
           if (!L.reserved_by) {
             const heads: Array<[string, number]> = [];
-            for (const f of ["1", "2"]) if (L.queue[f].length) { const rid = L.queue[f][0]; heads.push([rid, this.rt[rid]?.liftEnqueuedTick ?? 0]); }
+            for (const f of Object.keys(L.queue)) if (L.queue[f].length) { const rid = L.queue[f][0]; heads.push([rid, this.rt[rid]?.liftEnqueuedTick ?? 0]); }
             heads.sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]));
             if (heads.length) { L.reserved_by = heads[0][0]; this.emit("LIFT_RESERVED", "LIFT", "INFO", `${lid} reserved by ${L.reserved_by}`, { robot_id: L.reserved_by }); }
           }
@@ -572,7 +585,7 @@ export class SimEngine {
             const rr = S.robots[L.reserved_by];
             if (!rr || rr.status === "OFFLINE") { this.releaseRobotFromLift(L.reserved_by!); break; }
             if (L.floor === rr.floor) { L.state = "DOOR_OPENING"; L.until_tick = tick + SIM.LIFT_DOOR_TICKS; }
-            else { L.target_floor = rr.floor; L.state = rr.floor === 2 ? "MOVING_UP" : "MOVING_DOWN"; L.floor = null; L.until_tick = tick + SIM.LIFT_TRAVEL_TICKS; }
+            else { L.target_floor = rr.floor; L.state = rr.floor > L.floor! ? "MOVING_UP" : "MOVING_DOWN"; L.y0 = L.y; L.floor = null; L.until_tick = tick + SIM.LIFT_TRAVEL_TICKS; }
           }
           break;
         }
@@ -585,7 +598,7 @@ export class SimEngine {
           break;
         }
         case "DOOR_OPENING": {
-          (L.floor === 1 ? (L.door_f1 = "OPEN") : (L.door_f2 = "OPEN"));
+          this.openLiftDoor(L, L.floor!);
           L.state = "BOARDING";                          // 等 reserved robot 走進來（robot 端驅動）
           this.emit("LIFT_GATE_OPENED", "LIFT", "LOW", `${lid} Floor ${L.floor} gate opened`, {});
           break;
@@ -594,29 +607,30 @@ export class SimEngine {
           const rr = L.reserved_by ? S.robots[L.reserved_by] : null;
           if (!rr || rr.status === "OFFLINE") {          // 預約者消失 → 關門回 IDLE
             if (L.reserved_by) this.releaseRobotFromLift(L.reserved_by);
-            L.door_f1 = "CLOSED"; L.door_f2 = "CLOSED"; L.state = "COOLDOWN"; L.until_tick = tick + SIM.LIFT_COOLDOWN_TICKS;
+            this.closeLiftDoors(L);
+            L.state = "COOLDOWN"; L.until_tick = tick + SIM.LIFT_COOLDOWN_TICKS;
             this.emit("LIFT_COOLDOWN_STARTED", "LIFT", "LOW", `${lid} cooldown`, {});
           }
           break;                                          // occupant 由 robot 端設定 → DOOR_CLOSING
         }
         case "DOOR_CLOSING": {
-          L.door_f1 = "CLOSED"; L.door_f2 = "CLOSED";
+          this.closeLiftDoors(L);
           if (L.occupant) {
             const rr = S.robots[L.occupant]; const dest = this.rt[L.occupant]?.pending?.floor ?? (rr.floor === 1 ? 2 : 1);
-            L.target_floor = dest; L.state = dest === 2 ? "MOVING_UP" : "MOVING_DOWN"; L.floor = null; L.until_tick = tick + SIM.LIFT_TRAVEL_TICKS;
+            L.target_floor = dest; L.state = dest > rr.floor ? "MOVING_UP" : "MOVING_DOWN"; L.y0 = L.y; L.floor = null; L.until_tick = tick + SIM.LIFT_TRAVEL_TICKS;
             L.trips++;
             this.emit("LIFT_DEPARTED", "LIFT", "INFO", `${lid} departed → Floor ${dest} (${L.occupant})`, { robot_id: L.occupant });
           } else { L.state = "COOLDOWN"; L.until_tick = tick + SIM.LIFT_COOLDOWN_TICKS; this.emit("LIFT_COOLDOWN_STARTED", "LIFT", "LOW", `${lid} cooldown`, {}); }
           break;
         }
         case "DOOR_OPENING_AT_DESTINATION": {
-          (L.floor === 1 ? (L.door_f1 = "OPEN") : (L.door_f2 = "OPEN"));
+          this.openLiftDoor(L, L.floor!);
           L.state = "ALIGHTING";                          // robot 端會把 occupant 走出去
           this.emit("LIFT_GATE_OPENED", "LIFT", "LOW", `${lid} Floor ${L.floor} gate opened`, {});
           break;
         }
         case "ALIGHTING": break;                          // robot 端清 occupant → DOOR_CLOSING_AFTER_EXIT
-        case "DOOR_CLOSING_AFTER_EXIT": { L.door_f1 = "CLOSED"; L.door_f2 = "CLOSED"; L.state = "COOLDOWN"; L.until_tick = tick + SIM.LIFT_COOLDOWN_TICKS; this.emit("LIFT_COOLDOWN_STARTED", "LIFT", "LOW", `${lid} cooldown`, {}); break; }
+        case "DOOR_CLOSING_AFTER_EXIT": { this.closeLiftDoors(L); L.state = "COOLDOWN"; L.until_tick = tick + SIM.LIFT_COOLDOWN_TICKS; this.emit("LIFT_COOLDOWN_STARTED", "LIFT", "LOW", `${lid} cooldown`, {}); break; }
         case "COOLDOWN": { L.state = "IDLE"; break; }
         default: break;
       }
@@ -912,8 +926,8 @@ export class SimEngine {
     const [cx,cz] = this.liftCabin(l);
     const approach = Math.hypot(r.position[0] - (cx - 2), r.position[2] - cz) / (SIM.MAX_SPEED * 0.8);
     // 預約者上車前仍留在 queue 裡，只有「不在任一 queue」（已離隊上車中）才額外 +1，避免重複計等待成本
-    const reservedExtra = L.reserved_by && !L.queue["1"].includes(L.reserved_by) && !L.queue["2"].includes(L.reserved_by) ? 1 : 0;
-    const queueLen = L.queue["1"].length + L.queue["2"].length + reservedExtra;
+    const reservedExtra = L.reserved_by && !Object.keys(L.queue).some((f) => L.queue[f].includes(L.reserved_by!)) ? 1 : 0;
+    const queueLen = Object.keys(L.queue).reduce((n, f) => n + L.queue[f].length, 0) + reservedExtra;
     const perService = (SIM.LIFT_DOOR_TICKS * 4 + SIM.LIFT_TRAVEL_TICKS + SIM.LIFT_LEVEL_TICKS + SIM.LIFT_COOLDOWN_TICKS + 40) * SIM.TICK_S;
     const busy = L.state === "IDLE" ? 0 : perService * 0.5;
     const wrongFloor = L.floor !== null && L.floor !== r.floor ? SIM.LIFT_TRAVEL_TICKS * SIM.TICK_S : 0;

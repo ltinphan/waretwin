@@ -126,8 +126,8 @@ export const LIFT_LIGHT: Record<string, string> = {
 export function liftLabel(L: LiftState | undefined): string {
   if (!L) return "";
   if (L.fault) return "FAULT";
-  if (L.state === "MOVING_UP" || L.state === "MOVING_DOWN") return `F${L.state === "MOVING_UP" ? "1 → F2" : "2 → F1"} · ${L.occupant ?? "empty"}`;
-  const q = (L.queue["1"]?.length ?? 0) + (L.queue["2"]?.length ?? 0);
+  if (L.state === "MOVING_UP" || L.state === "MOVING_DOWN") return `→ F${L.target_floor} · ${L.occupant ?? "empty"}`;
+  const q = Object.keys(L.queue).reduce((n, f) => n + (L.queue[f]?.length ?? 0), 0);
   if (L.state === "IDLE") return `IDLE AT F${L.floor}${q ? ` · QUEUE ${q}` : ""}`;
   return `${L.state.replace(/_/g, " ")}${L.occupant ? ` · ${L.occupant}` : ""}`;
 }
@@ -160,8 +160,8 @@ function Lift({ l, elev, lite }: { l: (typeof layout.lifts)[number]; elev: numbe
       const base = sign * LEAF / 2;
       m.position.z += ((open ? base + sign * LEAF : base) - m.position.z) * k;
     };
-    setLeaf(0, L.door_f1 === "OPEN", -1); setLeaf(1, L.door_f1 === "OPEN", +1);
-    setLeaf(2, L.door_f2 === "OPEN", -1); setLeaf(3, L.door_f2 === "OPEN", +1);
+    setLeaf(0, L.door_state?.["1"] === "OPEN" || L.door_f1 === "OPEN", -1); setLeaf(1, L.door_state?.["1"] === "OPEN" || L.door_f1 === "OPEN", +1);
+    setLeaf(2, L.door_state?.["2"] === "OPEN" || L.door_f2 === "OPEN", -1); setLeaf(3, L.door_state?.["2"] === "OPEN" || L.door_f2 === "OPEN", +1);
     if (lightRef.current) {
       const c = L.fault ? "#ef4444" : LIFT_LIGHT[L.state] ?? "#22c55e";
       lightRef.current.color.set(c);

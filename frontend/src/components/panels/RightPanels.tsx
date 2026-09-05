@@ -27,20 +27,19 @@ function LiftPanel({ id }: { id: string }) {
   const lay = layout.lifts.find((l) => l.id === id);
   const tick = useStore((s) => s.twin.sim.tick);
   if (!L || !lay) return null;
-  const q1 = L.queue["1"] ?? [], q2 = L.queue["2"] ?? [];
   const moving = L.state === "MOVING_UP" || L.state === "MOVING_DOWN";
   const eta = moving ? Math.max(0, (L.until_tick - tick) / 10).toFixed(1) : null;
   const util = tick ? Math.round((L.busy_ticks / tick) * 100) : 0;
   const avgWait = L.wait_n ? ((L.wait_total_ticks / L.wait_n) / 10).toFixed(1) : "—";
   const cite = (rid: string) => <button key={rid} className="cite" onClick={() => select(rid)}>{rid}</button>;
+  const queueKeys = Object.keys(L.queue).sort((a, b) => Number(a) - Number(b));
   return (
     <Panel title={id} sub="Freight lift" action={<button className="link" onClick={() => selectLift(null)}>✕</button>}>
       <div className="kv"><span className="k">State</span><span className="v" style={{ fontFamily: "var(--mono)", fontSize: 11.5, color: L.fault ? "#ef4444" : undefined }}>{L.fault ? "FAULT" : L.state.replace(/_/g, " ")}{eta ? ` · ETA ${eta}s` : ""}</span></div>
-      <div className="kv"><span className="k">Floor</span><span className="v">{L.floor === null ? `${L.state === "MOVING_UP" ? "F1 → F2" : "F2 → F1"}` : `F${L.floor}`}</span></div>
+      <div className="kv"><span className="k">Floor</span><span className="v">{L.floor === null ? `→ F${L.target_floor}` : `F${L.floor}`}</span></div>
       <div className="kv"><span className="k">Occupied by</span><span className="v">{L.occupant ? cite(L.occupant) : "—"}</span></div>
       <div className="kv"><span className="k">Reserved by</span><span className="v">{L.reserved_by ? cite(L.reserved_by) : "—"}</span></div>
-      <div className="kv"><span className="k">F1 queue</span><span className="v">{q1.length ? q1.map(cite) : "—"}</span></div>
-      <div className="kv"><span className="k">F2 queue</span><span className="v">{q2.length ? q2.map(cite) : "—"}</span></div>
+      {queueKeys.map((f) => <div className="kv" key={f}><span className="k">F{f} queue</span><span className="v">{L.queue[f].length ? L.queue[f].map(cite) : "—"}</span></div>)}
       <div className="kv"><span className="k">Trips</span><span className="v">{L.trips}</span></div>
       <div className="kv"><span className="k">Avg wait</span><span className="v">{avgWait}{L.wait_n ? " s" : ""}</span></div>
       <div className="kv"><span className="k">Utilization</span><span className="v">{util}%</span></div>
