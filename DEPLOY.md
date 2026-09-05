@@ -49,3 +49,9 @@ To enable live AI mode, add to `docker-compose.yml` backend env:
 ```yaml
 OPENAI_API_KEY: sk-...
 ```
+
+## Auto-deploy (optional)
+
+`docs/AUTO-DEPLOY.md` — one-time host + CI setup (webhook service, tunnel
+path rule, `DEPLOY_TOKEN` secret), after which every merged push to `main`
+triggers a pull + rebuild on the host automatically.
