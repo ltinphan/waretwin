@@ -92,6 +92,12 @@ class RobotRt:
 
 
 class SimEngine:
+    def _to_cell(self, x: float, z: float) -> tuple[int, int]:
+        return to_cell(x, z, self.layout['grid']['cell_size'])
+
+    def _cell_center(self, cell: tuple[int, int]) -> tuple[float, float]:
+        return cell_center(cell, self.layout['grid']['cell_size'])
+
     def __init__(self, layout: dict[str, Any], seed: int = 42, initial_state: Optional[dict[str, Any]] = None) -> None:
         self.layout = layout
         self.grid: NavGrid = build_nav_grid(layout, 1)
@@ -146,8 +152,9 @@ class SimEngine:
         L = self.layout
         robots: dict[str, Any] = {}
         for sp in L["spawn"]["robots"]:
+            x, z = self._cell_center(self._to_cell(sp['position'][0], sp['position'][2]))
             robots[sp["id"]] = {
-                "id": sp["id"], "model": "AMR-L", "position": [math.floor(sp["position"][0]) + 0.5, 0, math.floor(sp["position"][2]) + 0.5], "heading": sp["heading"],
+                "id": sp["id"], "model": "AMR-L", "position": [x, self._elev_of(sp.get('floor', 1)), z], "heading": sp["heading"],
                 "floor": sp.get("floor", 1), "lift_id": None, "lift_stage": None,
                 "velocity": 0, "max_speed": SIM["MAX_SPEED"], "battery": sp["battery"], "status": "IDLE", "fsm": "IDLE",
                 "health": 95 + math.floor(self.rng() * 5), "current_task_id": None, "destination": None, "path": [], "path_index": 0,
@@ -305,14 +312,23 @@ class SimEngine:
         def pick(a: list) -> Any:
             return a[math.floor(self.rng() * len(a))]
 
+        # ponytail: guards pick() on empty operational categories (empty/custom layouts);
+        # RNG call order is unchanged when every category is non-empty (demo parity).
+        categories = (("PICK", shelves, packs), ("REPLENISH", inbound, shelves), ("TRANSPORT", packs, outbound))
         r = self.rng()
         pr = "HIGH" if r < 0.15 else "CRITICAL" if r < 0.18 else "NORMAL"
         if r < 0.55:
-            self.create_task("PICK", pr, pick(shelves)["id"], pick(packs)["id"])
+            type_, srcs, dsts = categories[0]
         elif r < 0.8:
-            self.create_task("REPLENISH", pr, pick(inbound)["id"], pick(shelves)["id"])
+            type_, srcs, dsts = categories[1]
         else:
-            self.create_task("TRANSPORT", pr, pick(packs)["id"], pick(outbound)["id"])
+            type_, srcs, dsts = categories[2]
+        if not srcs or not dsts:
+            viable = [c for c in categories if c[1] and c[2]]
+            if not viable:
+                return   # no operational locations yet — nothing to move
+            type_, srcs, dsts = viable[0]
+        self.create_task(type_, pr, pick(srcs)["id"], pick(dsts)["id"])
 
     def _assign_tasks(self) -> None:
         S = self.state
@@ -339,7 +355,8 @@ class SimEngine:
                     ranked = sorted(({"l": l, "cost": self.lift_cost(r, l)} for l in self.layout["lifts"]), key=lambda x: (x["cost"], x["l"]["id"]))
                     best_l = ranked[0] if ranked else None
                     if best_l and best_l["cost"] < math.inf:
-                        approach = math.hypot(r["position"][0] - (best_l["l"]["cell"][0] - 1.5), r["position"][2] - (best_l["l"]["cell"][1] + 0.5)) / (SIM["MAX_SPEED"] * 0.8)
+                        cx, cz = self._lift_cabin(best_l['l'])
+                        approach = math.hypot(r['position'][0] - (cx - 2), r['position'][2] - cz) / (SIM['MAX_SPEED'] * 0.8)
                         wait_s = jsround((best_l["cost"] - approach) * 10) / 10
                         lift_info = {"id": best_l["l"]["id"], "waitS": wait_s}
                         lift_pick[r["id"]] = best_l["l"]["id"]
@@ -414,23 +431,22 @@ class SimEngine:
     def _elev_of(self, floor: int) -> float:
         return next((f["elevation"] for f in self.layout.get("floors", []) if f["id"] == floor), 0.0)
 
-    @staticmethod
-    def _lift_slot(l: dict[str, Any], i: int) -> tuple[float, float]:
+    def _lift_slot(self, l: dict[str, Any], i: int) -> tuple[float, float]:
         # 排隊格（round-9b 再退一格）：slot0 = cell−4，距轉向安全點 1.916 m ——
         # 原地旋轉掃掠（對角半徑 0.584）對上任意朝向的排隊車（最壞 0.584）需要 ≥ 1.17 m 才保證不碰；
         # 舊的 cell−3（相距 0.916 m）光是兩台面對面站著（0.475+0.475=0.95）就會車體重疊
-        return (l["cell"][0] - 4 - i + 0.5, l["cell"][1] + 0.5)
+        x, z = self._lift_cabin(l)
+        return (x - 4 - i, z)
 
-    @staticmethod
-    def _lift_cabin(l: dict[str, Any]) -> tuple[float, float]:
-        return (l["cell"][0] + 0.5, l["cell"][1] + 0.5)
+    def _lift_cabin(self, l: dict[str, Any]) -> tuple[float, float]:
+        return self._cell_center(l['cell'])
 
     def _lift_gate_point(self, l: dict[str, Any]) -> tuple[float, float]:
         """閘門通過點＝轉向安全點（round-8d）：門軸正中央（z = cz，不偏移 —— 偏移會讓車體掃過門框）。
         x = 門面 − 車體【對角半徑】− 0.10 m 餘裕（≈ cx − 2.084）：長方形車體原地旋轉的掃掠圓半徑是
         √(半長² + 半寬²) ≈ 0.584 m，只用半長會在最不利角度侵入門面 —— 到這裡整台車連旋轉都不碰門框。
         排隊線在 cell−4−i（round-9b），此點與佔用中的 slot0 相距 ≈ 1.916 m —— 原地旋轉掃掠對排隊車也安全。"""
-        cx = l["cell"][0] + 0.5; cz = l["cell"][1] + 0.5
+        cx, cz = self._lift_cabin(l)
         return (cx - (SIM["LIFT_SHAFT_HALF_X"] + math.hypot(SIM["ROBOT_HALF_LEN"], SIM["ROBOT_HALF_W"]) + 0.10), cz)
 
     def _pick_lift_exit(self, l: dict[str, Any], floor: int, toward: Optional[tuple[float, float]] = None, skip: int = 0) -> tuple[float, float]:
@@ -470,10 +486,10 @@ class SimEngine:
 
         ok: list[tuple[float, tuple[float, float]]] = []
         for dc, dr in ((-2, -2), (-2, 2), (-3, -1), (-3, 1), (-3, -2), (-3, 2), (-2, 0)):
-            c = l["cell"][0] + dc; r_ = l["cell"][1] + dr
+            c, r_ = self._to_cell(cabin[0] + dc, cabin[1] + dr)
             if not is_walkable(grid, c, r_):
                 continue
-            pnt = (c + 0.5, r_ + 0.5)
+            pnt = self._cell_center((c, r_))
             if not clear(pnt) or not stand_clear(pnt):
                 continue
             hug = 0.75 if (dc == -2 and dr != 0) else 0.0
@@ -482,7 +498,7 @@ class SimEngine:
         ok.sort(key=lambda x: x[0])
         if ok:
             return ok[skip % len(ok)][1]
-        return (l["cell"][0] - 2 + 0.5, l["cell"][1] - 2 + 0.5)
+        return self._cell_center(self._to_cell(cabin[0] - 2, cabin[1] - 2))
 
     @staticmethod
     def obb_overlap(ax: float, az: float, ah: float, bx: float, bz: float, bh: float, margin: float = 0.0) -> bool:
@@ -871,7 +887,7 @@ class SimEngine:
             self._set_fsm(r, "REPLANNING")
         elif f == "REPLANNING":
             if rt.target:
-                p = astar(self.grids[r["floor"]], to_cell(r["position"][0], r["position"][2]), rt.target, blocked=self._blocked_cells(r["id"], r["floor"]), cost_map=self._congestion_cost(r["floor"]))
+                p = astar(self.grids[r["floor"]], self._to_cell(r["position"][0], r["position"][2]), rt.target, blocked=self._blocked_cells(r["id"], r["floor"]), cost_map=self._congestion_cost(r["floor"]))
                 if p is not None:
                     r["path"] = [list(c) for c in p]; r["path_index"] = 0; rt.wait_ticks = 0
                     self.emit("ROUTE_REPLANNED", "PLANNER", "LOW", f"{r['id']} rerouted ({len(p)} cells)", robot_id=r["id"], task_id=r["current_task_id"])
@@ -912,8 +928,8 @@ class SimEngine:
                 continue
             t = self.rt[rid].target
             if t: claimed.add((t[0], t[1]))
-            claimed.add(to_cell(o["position"][0], o["position"][2]))
-        my = to_cell(r["position"][0], r["position"][2])
+            claimed.add(self._to_cell(o["position"][0], o["position"][2]))
+        my = self._to_cell(r["position"][0], r["position"][2])
         best: Optional[tuple[int, int]] = None; best_d = math.inf
         R = SIM["SERVICE_RADIUS"]
         for dr in range(-R, R + 1):
@@ -931,7 +947,8 @@ class SimEngine:
         L = self.state["lifts"][l["id"]]
         if L["fault"]:
             return math.inf
-        approach = math.hypot(r["position"][0] - (l["cell"][0] - 1.5), r["position"][2] - (l["cell"][1] + 0.5)) / (SIM["MAX_SPEED"] * 0.8)
+        cx, cz = self._lift_cabin(l)
+        approach = math.hypot(r['position'][0] - (cx - 2), r['position'][2] - cz) / (SIM['MAX_SPEED'] * 0.8)
         # 預約者上車前仍留在 queue 裡，只有「不在任一 queue」（已離隊上車中）才額外 +1，避免重複計等待成本
         rb = L["reserved_by"]
         reserved_extra = 1 if rb and rb not in L["queue"]["1"] and rb not in L["queue"]["2"] else 0
@@ -970,8 +987,8 @@ class SimEngine:
             L = self.state["lifts"][lift["id"]]
             slot_idx = min(len(L["queue"][str(r["floor"])]), 2)
             sp = self._lift_slot(lift, slot_idx)
-            start = to_cell(r["position"][0], r["position"][2])
-            goal = (math.floor(sp[0]), math.floor(sp[1]))
+            start = self._to_cell(r["position"][0], r["position"][2])
+            goal = self._to_cell(sp[0], sp[1])
             grid = self.grids[r["floor"]]
             path = astar(grid, start, goal, blocked=self._blocked_cells(r["id"], r["floor"]), cost_map=self._congestion_cost(r["floor"]))
             if path is None:
@@ -985,7 +1002,7 @@ class SimEngine:
                 rt.target = None
             self._update_eta(r)
             return
-        start = to_cell(r["position"][0], r["position"][2])
+        start = self._to_cell(r["position"][0], r["position"][2])
         grid = self.grids[r["floor"]]
         # TO_CHARGER 不用服務格（round-9d）：服務格會讓機器人散落在充電樁旁任意空格 —— 充電要直達自己那一樁的入口格
         goal = (self._free_service_cell(r, point) if loc_id and phase != "TO_CHARGER" else None) or nearest_walkable(grid, point[0], point[1])
@@ -1008,13 +1025,13 @@ class SimEngine:
             rt.target = None; r["velocity"] = 0; r["path"] = []; r["path_index"] = 0; return
         nxt = r["path"][r["path_index"]]
         ncell = (nxt[0], nxt[1])
-        tx, tz = cell_center(ncell)
+        tx, tz = self._cell_center(ncell)
         pos = r["position"]
         dx = tx - pos[0]; dz = tz - pos[2]
         dist = math.hypot(dx, dz)
         fl = r["floor"]
         occ = self.occupancy.get((fl, ncell[0], ncell[1]))
-        my_cell = to_cell(pos[0], pos[2])
+        my_cell = self._to_cell(pos[0], pos[2])
         entering = my_cell != ncell
         if entering and not occ and ncell[0] != my_cell[0] and ncell[1] != my_cell[1]:
             a = self.occupancy.get((fl, ncell[0], my_cell[1])); b = self.occupancy.get((fl, my_cell[0], ncell[1]))
@@ -1129,11 +1146,11 @@ class SimEngine:
         """讓路：走到附近一個沒人要經過的空格，之後回到原目標重新規劃"""
         if rt.backing_off or rt.target is None:
             rt.wait_ticks = 0; return
-        my = to_cell(r["position"][0], r["position"][2])
+        my = self._to_cell(r["position"][0], r["position"][2])
         claimed: set[tuple[int, int]] = set()
         for o in self.state["robots"].values():
             if o["id"] == r["id"] or o["floor"] != r["floor"]: continue
-            claimed.add(to_cell(o["position"][0], o["position"][2]))
+            claimed.add(self._to_cell(o["position"][0], o["position"][2]))
             for c in o["path"][o["path_index"]:o["path_index"] + 4]:
                 claimed.add((c[0], c[1]))
         best = None; best_d = 99
@@ -1148,7 +1165,7 @@ class SimEngine:
         if best is None: return
         p = astar(self.grids[r["floor"]], my, best, blocked=claimed)
         if not p: return
-        gx, gz = cell_center(rt.target)
+        gx, gz = self._cell_center(rt.target)
         rt.resume_point = (gx, gz); rt.backing_off = True; rt.target = best
         r["path"] = [list(c) for c in p]; r["path_index"] = 0
         self.emit("ROBOT_COLLISION_AVOIDED", "PLANNER", "LOW", f"{r['id']} yields (back-off {len(p)} cells)", robot_id=r["id"])
@@ -1156,7 +1173,7 @@ class SimEngine:
     def _remaining_path_length(self, r: dict[str, Any]) -> float:
         length = 0.0; px, pz = r["position"][0], r["position"][2]
         for i in range(r["path_index"], len(r["path"])):
-            cx, cz = cell_center((r["path"][i][0], r["path"][i][1]))
+            cx, cz = self._cell_center((r["path"][i][0], r["path"][i][1]))
             length += math.hypot(cx - px, cz - pz); px, pz = cx, cz
         return length
 
@@ -1170,7 +1187,7 @@ class SimEngine:
         d = math.hypot(x1 - x0, z1 - z0); n = max(1, math.ceil(d / 0.5))
         for i in range(1, n):
             t = i / n
-            c = to_cell(x0 + (x1 - x0) * t, z0 + (z1 - z0) * t)
+            c = self._to_cell(x0 + (x1 - x0) * t, z0 + (z1 - z0) * t)
             if not is_walkable(grid, c[0], c[1]):
                 return False
         return True
@@ -1206,7 +1223,7 @@ class SimEngine:
         ahead = SIM["LIDAR_RANGE"]
         d = 0.5
         while d <= SIM["LIDAR_RANGE"] + 1e-9:
-            c = to_cell(x + cos_h * d, z + sin_h * d)
+            c = self._to_cell(x + cos_h * d, z + sin_h * d)
             if not is_walkable(grid, c[0], c[1]):
                 ahead = d; break
             d += 0.25
@@ -1215,7 +1232,7 @@ class SimEngine:
         obs.sort(key=lambda o: (o["distance_m"], o["id"] or ""))
         front_id: Optional[str] = None; front_dist = math.inf
         if r["path_index"] < len(r["path"]):
-            on_path: set[tuple[int, int]] = set(); prev = to_cell(x, z)
+            on_path: set[tuple[int, int]] = set(); prev = self._to_cell(x, z)
             for i in range(r["path_index"], min(len(r["path"]), r["path_index"] + SIM["PERC_LOOKAHEAD"])):
                 c = (r["path"][i][0], r["path"][i][1]); on_path.add(c)
                 if c[0] != prev[0] and c[1] != prev[1]:
@@ -1225,7 +1242,7 @@ class SimEngine:
                 if o["kind"] == "RACK" or o["id"] is None:
                     continue
                 pos = self.state["robots"][o["id"]]["position"] if o["kind"] == "ROBOT" else self.state["people"][o["id"]]["position"]
-                if to_cell(pos[0], pos[2]) in on_path and o["distance_m"] < front_dist:
+                if self._to_cell(pos[0], pos[2]) in on_path and o["distance_m"] < front_dist:
                     front_dist = o["distance_m"]; front_id = o["id"]
         rt.front_id = front_id; rt.front_dist = front_dist
         P["obstacles"] = obs[:5]
@@ -1237,7 +1254,7 @@ class SimEngine:
         self.occupancy.clear()
         for rid, r in self.state["robots"].items():
             fl = r["floor"]
-            c = to_cell(r["position"][0], r["position"][2]); self.occupancy[(fl, c[0], c[1])] = rid
+            c = self._to_cell(r["position"][0], r["position"][2]); self.occupancy[(fl, c[0], c[1])] = rid
             if r["path_index"] < len(r["path"]):
                 n = (fl, r["path"][r["path_index"]][0], r["path"][r["path_index"]][1])
                 if n not in self.occupancy:
@@ -1255,8 +1272,9 @@ class SimEngine:
             b = self._zone_bounds.get(zid)
             if not b: continue
             x0, z0, x1, z1 = b
-            for c in range(math.floor(x0), math.floor(x1)):
-                for r in range(math.floor(z0), math.floor(z1)):
+            cs = self.layout['grid']['cell_size']
+            for c in range(max(0, math.floor(x0/cs)), min(self.grid.cols, math.ceil(x1/cs))):
+                for r in range(max(0, math.floor(z0/cs)), min(self.grid.rows, math.ceil(z1/cs))):
                     s.add((c, r))
         return s
 
@@ -1275,19 +1293,21 @@ class SimEngine:
             b = self._zone_bounds.get(zid)
             if not b: continue
             x0, z0, x1, z1 = b; add = 3 * cz["level"]; cols = self.grid.cols
-            for rr in range(math.floor(z0), math.ceil(z1)):
+            cs = self.layout['grid']['cell_size']
+            for rr in range(max(0, math.floor(z0/cs)), min(self.grid.rows, math.ceil(z1/cs))):
                 base = rr * cols
-                for c in range(math.floor(x0), math.ceil(x1)):
+                for c in range(max(0, math.floor(x0/cs)), min(cols, math.ceil(x1/cs))):
                     out[base + c] += add
         return out
 
     def _zone_speed_factor(self, cell: tuple[int, int], floor: int) -> float:
+        x, zpos = self._cell_center(cell)
         for zid, cz in self.congested_zones.items():
             z = next((zz for zz in self.layout["zones"] if zz["id"] == zid), None)
             if not z or z.get("floor", 1) != floor:
                 continue
             b = self._zone_bounds.get(zid)
-            if b and b[0] <= cell[0] < b[2] and b[1] <= cell[1] < b[3]:
+            if b and b[0] <= x < b[2] and b[1] <= zpos < b[3]:
                 return 1 - 0.7 * cz["level"]
         return 1.0
 
@@ -1367,7 +1387,7 @@ class SimEngine:
             return None
         p = parks[0]
         i = int("".join(ch for ch in r["id"] if ch.isdigit())) - 1
-        x = math.floor(p["rect"][0] + 1 + (i % 10) * 2) + 0.5; z = math.floor(p["rect"][1] + 1 + (i // 10) * 2.2) + 0.5
+        x, z = self._cell_center(self._to_cell(p['rect'][0] + 1 + (i % 10) * 2, p['rect'][1] + 1 + (i // 10) * 2.2))
         if math.hypot(r["position"][0] - x, r["position"][2] - z) < 1.5:
             return None
         return (x, z)

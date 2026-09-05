@@ -1,6 +1,8 @@
 # 完整鎖定版本：在乾淨的 Python 3.11 venv 執行 pip install -r requirements.txt 後 pip freeze（2026-08-22）。
 # Render / Docker 用這份 → build 可重現。要升級：改 requirements.txt 的範圍，重做上面的步驟。
 PyYAML==6.0.3
+shapely==2.1.2
+numpy==2.2.6
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.14.2

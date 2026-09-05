@@ -109,6 +109,8 @@ interface RobotRt {
 export interface EngineOptions { seed?: number; initialState?: TwinState }
 
 export class SimEngine {
+  private toCell(x: number, z: number): GridCell { return toCell(x, z, this.layout.grid.cell_size); }
+  private cellCenter(cell: GridCell): [number, number] { return cellCenter(cell, this.layout.grid.cell_size); }
   readonly layout: WarehouseLayout;
   /** 一樓網格（heatmap / 交通成本沿用）；各樓層網格見 grids */
   readonly grid: NavGrid;
@@ -222,7 +224,7 @@ export class SimEngine {
     const robots: Record<string, RobotState> = {};
     for (const sp of L.spawn.robots) {
       robots[sp.id] = {
-        id: sp.id, model: "AMR-L", position: [Math.floor(sp.position[0]) + 0.5, 0, Math.floor(sp.position[2]) + 0.5], heading: sp.heading, velocity: 0, max_speed: SIM.MAX_SPEED, floor: sp.floor ?? 1, lift_id: null, lift_stage: null,
+        id: sp.id, model: "AMR-L", position: [this.cellCenter(this.toCell(sp.position[0], sp.position[2]))[0], this.elevOf(sp.floor ?? 1), this.cellCenter(this.toCell(sp.position[0], sp.position[2]))[1]], heading: sp.heading, velocity: 0, max_speed: SIM.MAX_SPEED, floor: sp.floor ?? 1, lift_id: null, lift_stage: null,
         battery: sp.battery, status: "IDLE", fsm: "IDLE", health: 95 + Math.floor(this.rng() * 5), current_task_id: null, destination: null,
         path: [], path_index: 0, load: { current: 0, capacity: 4 }, zone: null, eta_s: null, fsm_since_tick: 0,
         stats: { distance_m: 0, tasks_completed: 0, energy_wh: 0, busy_ticks: 0, wait_ticks: 0 },
@@ -329,11 +331,23 @@ export class SimEngine {
     const inbound = this.layout.locations.filter((l) => l.kind === "INBOUND");
     const outbound = this.layout.locations.filter((l) => l.kind === "OUTBOUND");
     const pick = <T,>(a: T[]) => a[Math.floor(this.rng() * a.length)];
+    // ponytail: guards pick() on empty operational categories (empty/custom layouts);
+    // RNG call order is unchanged when every category is non-empty (demo parity).
+    const categories: Array<[Task["type"], typeof shelves, typeof shelves]> = [
+      ["PICK", shelves, packs],
+      ["REPLENISH", inbound, shelves],
+      ["TRANSPORT", packs, outbound],
+    ];
     const r = this.rng();
     const pr: TaskPriority = r < 0.15 ? "HIGH" : r < 0.18 ? "CRITICAL" : "NORMAL";
-    if (r < 0.55) this.createTask({ type: "PICK", priority: pr, source: pick(shelves).id, destination: pick(packs).id });
-    else if (r < 0.8) this.createTask({ type: "REPLENISH", priority: pr, source: pick(inbound).id, destination: pick(shelves).id });
-    else this.createTask({ type: "TRANSPORT", priority: pr, source: pick(packs).id, destination: pick(outbound).id });
+    const idx = r < 0.55 ? 0 : r < 0.8 ? 1 : 2;
+    let [type, srcs, dsts] = categories[idx];
+    if (!srcs.length || !dsts.length) {
+      const viable = categories.filter((c) => c[1].length && c[2].length);
+      if (!viable.length) return;   // no operational locations yet — nothing to move
+      [type, srcs, dsts] = viable[0];
+    }
+    this.createTask({ type, priority: pr, source: pick(srcs).id, destination: pick(dsts).id });
   }
 
   /** Fleet Manager（簡化版）：距離 + 電量 + 負載 + 擁塞 + 健康 的加權分數，附可解釋的候選清單 */
@@ -356,7 +370,7 @@ export class SimEngine {
         if (r.floor !== srcFloor) {
           const best = [...this.layout.lifts].map((l) => ({ l, cost: this.liftCost(r, l) })).sort((a, b) => a.cost - b.cost || a.l.id.localeCompare(b.l.id))[0];
           const waitS = best && best.cost < Infinity
-            ? Math.round((best.cost - Math.hypot(r.position[0] - (best.l.cell[0] - 1.5), r.position[2] - (best.l.cell[1] + 0.5)) / (SIM.MAX_SPEED * 0.8)) * 10) / 10
+            ? Math.round((best.cost - Math.hypot(r.position[0] - (this.liftCabin(best.l)[0] - 2), r.position[2] - this.liftCabin(best.l)[1]) / (SIM.MAX_SPEED * 0.8)) * 10) / 10
             : 60;
           liftInfo = { id: best && best.cost < Infinity ? best.l.id : "—", waitS };
           if (liftInfo.id !== "—") liftPick[r.id] = liftInfo.id;
@@ -419,8 +433,8 @@ export class SimEngine {
   /** 排隊格（round-9b 再退一格）：slot0 = cell−4，距轉向安全點 1.916 m ——
    *  原地旋轉的掃掠圓（對角半徑 0.584）對上任意朝向的排隊車（最壞也是 0.584）需要 ≥ 1.17 m 才保證不碰；
    *  舊的 cell−3（相距 0.916 m）光是兩台面對面站著（0.475+0.475=0.95）就會車體重疊。 */
-  private liftSlot(l: (typeof this.layout.lifts)[number], i: number): [number, number] { return [l.cell[0] - 4 - i + 0.5, l.cell[1] + 0.5]; }
-  private liftCabin(l: (typeof this.layout.lifts)[number]): [number, number] { return [l.cell[0] + 0.5, l.cell[1] + 0.5]; }
+  private liftSlot(l: (typeof this.layout.lifts)[number], i: number): [number, number] { const [x,z]=this.liftCabin(l); return [x-4-i,z]; }
+  private liftCabin(l: (typeof this.layout.lifts)[number]): [number, number] { return this.cellCenter(l.cell); }
   /** 出口節點（規格書 §6.4）：與排隊線分開，且「從轎廂到出口的直線」必須避開所有站著的機器人（排隊/閒置），
    *  一次選定（sticky），被擋太久才換下一個候選 —— 避免每 tick 換目標造成的原地震盪。 */
   private pickLiftExit(l: (typeof this.layout.lifts)[number], floor: number, toward: [number, number] | null = null, skip = 0): [number, number] {
@@ -455,16 +469,16 @@ export class SimEngine {
     };
     const ok: Array<{ p: [number, number]; key: number }> = [];
     for (const [dc, dr] of cand) {
-      const c = l.cell[0] + dc, r = l.cell[1] + dr;
+      const [c,r] = this.toCell(cabin[0]+dc,cabin[1]+dr);
       if (!isWalkable(grid, c, r)) continue;
-      const p: [number, number] = [c + 0.5, r + 0.5];
+      const p: [number, number] = this.cellCenter([c,r]);
       if (!clear(p) || !standClear(p)) continue;
       const hug = dc === -2 && dr !== 0 ? 0.75 : 0;
       ok.push({ p, key: (toward ? Math.hypot(p[0] - toward[0], p[1] - toward[1]) : 0) + hug });
     }
     ok.sort((a, b) => a.key - b.key);
     if (ok.length) return ok[skip % ok.length].p;
-    return [l.cell[0] - 2 + 0.5, l.cell[1] - 2 + 0.5];
+    return this.cellCenter(this.toCell(cabin[0]-2,cabin[1]-2));
   }
 
   /** 閘門通過點＝轉向安全點（round-8d）：門軸正中央（z = cz，不偏移 —— 偏移會讓車體掃過門框）。
@@ -472,7 +486,7 @@ export class SimEngine {
    *  √(半長² + 半寬²) ≈ 0.584 m，只用半長會在最不利角度侵入門面 —— 到這裡整台車連旋轉都不碰門框。
    *  排隊線在 cell−4−i（round-9b），此點與佔用中的 slot0 相距 ≈ 1.916 m —— 原地旋轉掃掠對排隊車也安全。 */
   private liftGatePoint(l: (typeof this.layout.lifts)[number]): [number, number] {
-    const cx = l.cell[0] + 0.5, cz = l.cell[1] + 0.5;
+    const [cx,cz] = this.liftCabin(l);
     return [cx - (SIM.LIFT_SHAFT_HALF_X + Math.hypot(SIM.ROBOT_HALF_LEN, SIM.ROBOT_HALF_W) + 0.10), cz];
   }
 
@@ -843,7 +857,7 @@ export class SimEngine {
         // 以目前被佔用的格為臨時障礙重新規劃
         if (rt.target) {
           const blocked = this.blockedCells(r.id, r.floor);
-          const p = astar(this.grids[r.floor], toCell(r.position[0], r.position[2]), rt.target, { blocked, costMap: this.congestionCost(r.floor) });
+          const p = astar(this.grids[r.floor], this.toCell(r.position[0], r.position[2]), rt.target, { blocked, costMap: this.congestionCost(r.floor) });
           if (p) { r.path = p; r.path_index = 0; rt.waitTicks = 0; this.emit("ROUTE_REPLANNED", "PLANNER", "LOW", `${r.id} rerouted (${p.length} cells)`, { robot_id: r.id, task_id: r.current_task_id ?? undefined }); }
         }
         this.setFsm(r, rt.phase === "TO_DEST" ? "TRANSPORTING" : rt.phase === "TO_CHARGER" ? "GOING_TO_CHARGE" : rt.phase === "TO_PARK" ? "IDLE" : "NAVIGATING");
@@ -878,8 +892,8 @@ export class SimEngine {
     const grid = this.grids[r.floor];
     const ap = nearestWalkable(grid, point[0], point[1]);
     const claimed = new Set<string>();
-    for (const id in this.state.robots) { if (id === r.id) continue; const o = this.state.robots[id]; if (o.floor !== r.floor) continue; const t = this.rt[id].target; if (t) claimed.add(cellKey(t[0], t[1])); const c = toCell(o.position[0], o.position[2]); claimed.add(cellKey(c[0], c[1])); }
-    const my = toCell(r.position[0], r.position[2]);
+    for (const id in this.state.robots) { if (id === r.id) continue; const o = this.state.robots[id]; if (o.floor !== r.floor) continue; const t = this.rt[id].target; if (t) claimed.add(cellKey(t[0], t[1])); const c = this.toCell(o.position[0], o.position[2]); claimed.add(cellKey(c[0], c[1])); }
+    const my = this.toCell(r.position[0], r.position[2]);
     let best: GridCell | null = null, bestD = Infinity;
     for (let dr = -SIM.SERVICE_RADIUS; dr <= SIM.SERVICE_RADIUS; dr++) for (let dc = -SIM.SERVICE_RADIUS; dc <= SIM.SERVICE_RADIUS; dc++) {
       const c: GridCell = [ap[0] + dc, ap[1] + dr];
@@ -895,7 +909,8 @@ export class SimEngine {
   liftCost(r: RobotState, l: (typeof this.layout.lifts)[number]): number {
     const L = this.state.lifts[l.id];
     if (L.fault) return Infinity;
-    const approach = Math.hypot(r.position[0] - (l.cell[0] - 1.5), r.position[2] - (l.cell[1] + 0.5)) / (SIM.MAX_SPEED * 0.8);
+    const [cx,cz] = this.liftCabin(l);
+    const approach = Math.hypot(r.position[0] - (cx - 2), r.position[2] - cz) / (SIM.MAX_SPEED * 0.8);
     // 預約者上車前仍留在 queue 裡，只有「不在任一 queue」（已離隊上車中）才額外 +1，避免重複計等待成本
     const reservedExtra = L.reserved_by && !L.queue["1"].includes(L.reserved_by) && !L.queue["2"].includes(L.reserved_by) ? 1 : 0;
     const queueLen = L.queue["1"].length + L.queue["2"].length + reservedExtra;
@@ -926,8 +941,8 @@ export class SimEngine {
       const L = this.state.lifts[lift.id];
       const slotIdx = Math.min(L.queue[String(r.floor)].length, 2);
       const sp = this.liftSlot(lift, slotIdx);
-      const start = toCell(r.position[0], r.position[2]);
-      const goal: GridCell = [Math.floor(sp[0]), Math.floor(sp[1])];
+      const start = this.toCell(r.position[0], r.position[2]);
+      const goal: GridCell = this.toCell(sp[0],sp[1]);
       const grid = this.grids[r.floor];
       const path = astar(grid, start, goal, { blocked: this.blockedCells(r.id, r.floor), costMap: this.congestionCost(r.floor) }) ?? astar(grid, start, goal) ?? [];
       r.path = path; r.path_index = 0; rt.target = goal; rt.phase = phase; rt.goalLoc = locId; rt.waitTicks = 0; rt.backingOff = false; rt.resumePoint = null;
@@ -936,7 +951,7 @@ export class SimEngine {
       this.updateEta(r);
       return;
     }
-    const start = toCell(r.position[0], r.position[2]);
+    const start = this.toCell(r.position[0], r.position[2]);
     const grid = this.grids[r.floor];
     // TO_CHARGER 不用服務格（round-9d）：服務格會讓機器人散落在充電樁旁任意空格 —— 充電要直達自己那一樁的入口格
     const goal = (locId && phase !== "TO_CHARGER" ? this.freeServiceCell(r, point) : null) ?? nearestWalkable(grid, point[0], point[1]);
@@ -951,12 +966,12 @@ export class SimEngine {
     if (rt.target === null) return;
     if (r.path_index >= r.path.length) { rt.target = null; r.velocity = 0; r.path = []; r.path_index = 0; return; }
     const next = r.path[r.path_index];
-    const [tx, tz] = cellCenter(next);
+    const [tx, tz] = this.cellCenter(next);
     const dx = tx - r.position[0], dz = tz - r.position[2];
     const dist = Math.hypot(dx, dz);
     // 佔用檢查：下一格若被其他機器人佔用就等待
     let occ = this.occupancy.get(cellKey(next[0], next[1]));
-    const myCell = toCell(r.position[0], r.position[2]);
+    const myCell = this.toCell(r.position[0], r.position[2]);
     const entering = !(myCell[0] === next[0] && myCell[1] === next[1]);
     // 斜向移動時，兩個正交鄰格也不能有別台機器人（否則會在角落擦撞）
     if (entering && !occ && next[0] !== myCell[0] && next[1] !== myCell[1]) {
@@ -1064,9 +1079,9 @@ export class SimEngine {
   /** 讓路：走到附近一個沒人要經過的空格，之後回到原目標重新規劃 */
   private backOff(r: RobotState, rt: RobotRt) {
     if (rt.backingOff || !rt.target) { rt.waitTicks = 0; return; }
-    const my = toCell(r.position[0], r.position[2]);
+    const my = this.toCell(r.position[0], r.position[2]);
     const claimed = new Set<string>();
-    for (const id in this.state.robots) { const o = this.state.robots[id]; if (o.id === r.id || o.floor !== r.floor) continue; const c = toCell(o.position[0], o.position[2]); claimed.add(cellKey(c[0], c[1])); for (let i = o.path_index; i < Math.min(o.path.length, o.path_index + 4); i++) claimed.add(cellKey(o.path[i][0], o.path[i][1])); }
+    for (const id in this.state.robots) { const o = this.state.robots[id]; if (o.id === r.id || o.floor !== r.floor) continue; const c = this.toCell(o.position[0], o.position[2]); claimed.add(cellKey(c[0], c[1])); for (let i = o.path_index; i < Math.min(o.path.length, o.path_index + 4); i++) claimed.add(cellKey(o.path[i][0], o.path[i][1])); }
     let best: GridCell | null = null, bestD = Infinity;
     for (let dr = -3; dr <= 3; dr++) for (let dc = -3; dc <= 3; dc++) {
       if (!dr && !dc) continue;
@@ -1078,7 +1093,7 @@ export class SimEngine {
     if (!best) return;
     const p = astar(this.grids[r.floor], my, best, { blocked: claimed });
     if (!p || !p.length) return;
-    const [gx, gz] = cellCenter(rt.target);
+    const [gx, gz] = this.cellCenter(rt.target);
     rt.resumePoint = [gx, gz]; rt.backingOff = true; rt.target = best;
     r.path = p; r.path_index = 0;
     this.emit("ROBOT_COLLISION_AVOIDED", "PLANNER", "LOW", `${r.id} yields (back-off ${p.length} cells)`, { robot_id: r.id });
@@ -1086,7 +1101,7 @@ export class SimEngine {
 
   private remainingPathLength(r: RobotState): number {
     let len = 0; let [px, pz] = [r.position[0], r.position[2]];
-    for (let i = r.path_index; i < r.path.length; i++) { const [cx, cz] = cellCenter(r.path[i]); len += Math.hypot(cx - px, cz - pz); px = cx; pz = cz; }
+    for (let i = r.path_index; i < r.path.length; i++) { const [cx, cz] = this.cellCenter(r.path[i]); len += Math.hypot(cx - px, cz - pz); px = cx; pz = cz; }
     return len;
   }
   private updateEta(r: RobotState) { r.eta_s = r.path.length ? Math.round(this.remainingPathLength(r) / (r.max_speed * 0.8)) : null; }
@@ -1099,7 +1114,7 @@ export class SimEngine {
   // ─────────────────────────────────────────────────────────
   private lineOfSight(grid: NavGrid, x0: number, z0: number, x1: number, z1: number): boolean {
     const d = Math.hypot(x1 - x0, z1 - z0); const n = Math.max(1, Math.ceil(d / 0.5));
-    for (let i = 1; i < n; i++) { const t = i / n; const c = toCell(x0 + (x1 - x0) * t, z0 + (z1 - z0) * t); if (!isWalkable(grid, c[0], c[1])) return false; }
+    for (let i = 1; i < n; i++) { const t = i / n; const c = this.toCell(x0 + (x1 - x0) * t, z0 + (z1 - z0) * t); if (!isWalkable(grid, c[0], c[1])) return false; }
     return true;
   }
   private updatePerception(r: RobotState, rt: RobotRt) {
@@ -1120,13 +1135,13 @@ export class SimEngine {
     for (const id in this.state.people) { const p = this.state.people[id]; if ((p.floor ?? 1) !== r.floor) continue; consider("HUMAN", id, p.position[0], p.position[2]); }
     // 正前方射線（靜態）
     let ahead = SIM.LIDAR_RANGE;
-    for (let d = 0.5; d <= SIM.LIDAR_RANGE; d += 0.25) { const c = toCell(x + cosH * d, z + sinH * d); if (!isWalkable(grid, c[0], c[1])) { ahead = d; break; } }
+    for (let d = 0.5; d <= SIM.LIDAR_RANGE; d += 0.25) { const c = this.toCell(x + cosH * d, z + sinH * d); if (!isWalkable(grid, c[0], c[1])) { ahead = d; break; } }
     if (ahead < SIM.LIDAR_RANGE) obs.push({ kind: "RACK", id: null, distance_m: Math.round(ahead * 10) / 10, bearing_deg: 0 });
     obs.sort((a, b) => a.distance_m - b.distance_m || (a.id ?? "").localeCompare(b.id ?? ""));
     // 會擋到我的動態障礙：位於我接下來 PERC_LOOKAHEAD 格路徑上（含斜向的正交鄰格）的最近一個
     let frontId: string | null = null, frontDist = Infinity;
     if (r.path_index < r.path.length) {
-      const onPath = new Set<string>(); let prev = toCell(x, z);
+      const onPath = new Set<string>(); let prev = this.toCell(x, z);
       for (let i = r.path_index; i < Math.min(r.path.length, r.path_index + SIM.PERC_LOOKAHEAD); i++) {
         const c = r.path[i]; onPath.add(cellKey(c[0], c[1]));
         if (c[0] !== prev[0] && c[1] !== prev[1]) { onPath.add(cellKey(c[0], prev[1])); onPath.add(cellKey(prev[0], c[1])); }
@@ -1135,7 +1150,7 @@ export class SimEngine {
       for (const o of obs) {
         if (o.kind === "RACK" || o.id === null) continue;
         const pos = o.kind === "ROBOT" ? this.state.robots[o.id].position : this.state.people[o.id].position;
-        const c = toCell(pos[0], pos[2]);
+        const c = this.toCell(pos[0], pos[2]);
         if (onPath.has(cellKey(c[0], c[1])) && o.distance_m < frontDist) { frontDist = o.distance_m; frontId = o.id; }
       }
     }
@@ -1152,7 +1167,7 @@ export class SimEngine {
     this.occupancy.clear();
     for (const id in this.state.robots) {
       const r = this.state.robots[id];
-      const c = toCell(r.position[0], r.position[2]); this.occupancy.set(this.fkey(r.floor, c[0], c[1]), id);
+      const c = this.toCell(r.position[0], r.position[2]); this.occupancy.set(this.fkey(r.floor, c[0], c[1]), id);
       // 也預約下一格，避免兩台同時進入；斜向移動時連兩個正交鄰格一起預約（防止 X 形交叉擦撞）
       if (r.path_index < r.path.length) {
         const n = r.path[r.path_index]; if (!this.occupancy.has(this.fkey(r.floor, n[0], n[1]))) this.occupancy.set(this.fkey(r.floor, n[0], n[1]), id);
@@ -1165,7 +1180,7 @@ export class SimEngine {
     const s = new Set<string>();
     const pre = `${floor}:`;
     for (const [k, id] of this.occupancy) if (id !== selfId && k.startsWith(pre)) s.add(k.slice(pre.length));
-    for (const zid of this.blockedZones) { const z = this.layout.zones.find((zz) => zz.id === zid); if (!z || (z.floor ?? 1) !== floor) continue; const xs = z.polygon.map((p) => p[0]), zs = z.polygon.map((p) => p[1]); for (let c = Math.floor(Math.min(...xs)); c < Math.max(...xs); c++) for (let r = Math.floor(Math.min(...zs)); r < Math.max(...zs); r++) s.add(cellKey(c, r)); }
+    for (const zid of this.blockedZones) { const z = this.layout.zones.find((zz) => zz.id === zid); if (!z || (z.floor ?? 1) !== floor) continue; const xs = z.polygon.map((p) => p[0]), zs = z.polygon.map((p) => p[1]); for (let c = Math.max(0, Math.floor(Math.min(...xs) / this.layout.grid.cell_size)); c < Math.min(this.grid.cols, Math.ceil(Math.max(...xs) / this.layout.grid.cell_size)); c++) for (let r = Math.max(0, Math.floor(Math.min(...zs) / this.layout.grid.cell_size)); r < Math.min(this.grid.rows, Math.ceil(Math.max(...zs) / this.layout.grid.cell_size)); r++) s.add(cellKey(c, r)); }
     return s;
   }
   private congestionCost(floor = 1): Float32Array | undefined {
@@ -1176,12 +1191,13 @@ export class SimEngine {
     const zonesOnFloor = [...this.congestedZones.keys()].filter((zid) => (this.layout.zones.find((z) => z.id === zid)?.floor ?? 1) === floor);
     if (max < 1 && zonesOnFloor.length === 0) return undefined;
     if (max >= 1) for (let i = 0; i < out.length; i++) out[i] = (T[i] / max) * 0.8;
-    for (const zid of zonesOnFloor) { const cz = this.congestedZones.get(zid)!; const z = this.layout.zones.find((zz) => zz.id === zid)!; const xs = z.polygon.map((p) => p[0]), zs = z.polygon.map((p) => p[1]); for (let c = Math.floor(Math.min(...xs)); c < Math.max(...xs); c++) for (let r = Math.floor(Math.min(...zs)); r < Math.max(...zs); r++) out[r * this.grid.cols + c] += 3 * cz.level; }
+    for (const zid of zonesOnFloor) { const cz = this.congestedZones.get(zid)!; const z = this.layout.zones.find((zz) => zz.id === zid)!; const xs = z.polygon.map((p) => p[0]), zs = z.polygon.map((p) => p[1]); for (let c = Math.max(0, Math.floor(Math.min(...xs) / this.layout.grid.cell_size)); c < Math.min(this.grid.cols, Math.ceil(Math.max(...xs) / this.layout.grid.cell_size)); c++) for (let r = Math.max(0, Math.floor(Math.min(...zs) / this.layout.grid.cell_size)); r < Math.min(this.grid.rows, Math.ceil(Math.max(...zs) / this.layout.grid.cell_size)); r++) out[r * this.grid.cols + c] += 3 * cz.level; }
     return out;
   }
   /** 注入的交通擁塞：zone 內速度上限比例 */
   private zoneSpeedFactor(cell: GridCell, floor: number): number {
-    for (const [zid, cz] of this.congestedZones) { const z = this.layout.zones.find((zz) => zz.id === zid); if (!z || (z.floor ?? 1) !== floor) continue; const xs = z.polygon.map((p) => p[0]), zs = z.polygon.map((p) => p[1]); if (cell[0] >= Math.min(...xs) && cell[0] < Math.max(...xs) && cell[1] >= Math.min(...zs) && cell[1] < Math.max(...zs)) return 1 - 0.7 * cz.level; }
+    const [x,zpos] = this.cellCenter(cell);
+    for (const [zid, cz] of this.congestedZones) { const z = this.layout.zones.find((zz) => zz.id === zid); if (!z || (z.floor ?? 1) !== floor) continue; const xs = z.polygon.map((p) => p[0]), zs = z.polygon.map((p) => p[1]); if (x >= Math.min(...xs) && x < Math.max(...xs) && zpos >= Math.min(...zs) && zpos < Math.max(...zs)) return 1 - 0.7 * cz.level; }
     return 1;
   }
   private decayTraffic() {
@@ -1245,7 +1261,7 @@ export class SimEngine {
   private parkSpot(r: RobotState): [number, number] | null {
     const p = this.layout.parking[0]; if (!p) return null;
     const i = parseInt(r.id.replace(/\D/g, ""), 10) - 1;
-    const x = Math.floor(p.rect[0] + 1 + (i % 10) * 2) + 0.5, z = Math.floor(p.rect[1] + 1 + Math.floor(i / 10) * 2.2) + 0.5;
+    const [x,z] = this.cellCenter(this.toCell(p.rect[0]+1+(i%10)*2,p.rect[1]+1+Math.floor(i/10)*2.2));
     if (Math.hypot(r.position[0] - x, r.position[2] - z) < 1.5) return null;
     return [x, z];
   }
@@ -1358,7 +1374,7 @@ export class SimEngine {
           this.emit("HUMAN_DETECTED", "VLM", "HIGH", `Human detected — Zone ${inj.zone_id}`, { zone_id: inj.zone_id });
           this.emit("ZONE_BLOCKED", "SIMULATION", "HIGH", `Zone ${inj.zone_id} marked BLOCKED`, { zone_id: inj.zone_id });
           this.raiseAlert(`zone-${inj.zone_id}`, "HIGH", `Zone ${inj.zone_id}  Human Detected`, "Route blocked", { zone_id: inj.zone_id });
-          for (const id in S.robots) { const r = S.robots[id]; if (r.path.length && r.path.slice(r.path_index).some(([c, rr]) => c >= Math.min(...xs) && c < Math.max(...xs) && rr >= Math.min(...zs) && rr < Math.max(...zs))) this.setFsm(r, "OBSTACLE_DETECTED"); }
+          for (const id in S.robots) { const r = S.robots[id]; if (r.path.length && r.path.slice(r.path_index).some(([c, rr]) => c >= Math.min(...xs) && c < Math.min(this.grid.cols, Math.ceil(Math.max(...xs) / this.layout.grid.cell_size)) && rr >= Math.min(...zs) && rr < Math.min(this.grid.rows, Math.ceil(Math.max(...zs) / this.layout.grid.cell_size)))) this.setFsm(r, "OBSTACLE_DETECTED"); }
           break;
         }
         case "TRAFFIC_CONGESTION": {
