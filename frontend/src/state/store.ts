@@ -7,7 +7,14 @@ export type ViewTab = "3D" | "MAP" | "TRAFFIC" | "HEATMAP";
 export type Quality = "low" | "medium" | "high";
 export type SceneTool = "select" | "pan" | "paths" | "labels" | "measure";
 
-export const layout = layoutJson as unknown as WarehouseLayout;
+const demoLayout = layoutJson as unknown as WarehouseLayout;
+/** Active layout: demo JSON until a published customer layout is opened. */
+export let layout = demoLayout;
+/** Swap the active layout (workspace "Open in demo"); callers re-derive via resetEngine. */
+export function setLayout(next: WarehouseLayout) {
+  layout = next;
+  useStore.setState({ locations: Object.fromEntries(next.locations.map((l) => [l.id, l])) });
+}
 
 interface Store {
   twin: TwinState;

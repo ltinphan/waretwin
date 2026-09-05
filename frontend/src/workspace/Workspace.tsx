@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ClipboardCheck, Copy, Download, LogOut, Plus, Redo2, Save, Trash2, Undo2, ZoomIn, ZoomOut } from 'lucide-react';
+import { ClipboardCheck, Copy, Download, LogOut, Play, Plus, Redo2, Save, Trash2, Undo2, ZoomIn, ZoomOut } from 'lucide-react';
 import type { LayoutRack, WarehouseLayout } from '../layout/types';
+import { setLayout } from '../state/store';
 import { workspaceClient, type LayoutRevision, type LayoutValidation, type Warehouse } from '../services/workspace';
 import './workspace.css';
 
@@ -148,6 +149,12 @@ export function Workspace() {
         if (revision) setValidation(await api.validate(revision));
       })}><ClipboardCheck size={18} /></button>
       <button title="Export layout JSON" aria-label="Export layout JSON" disabled={!layout} onClick={exportLayout}><Download size={18} /></button>
+      <button title="Open the published layout in the live demo simulation" aria-label="Open published layout in demo"
+        disabled={busy || revision?.state !== 'published'}
+        onClick={() => void action(async () => {
+          setLayout(revision!.document);
+          location.href = "/";
+        })}><Play size={18} /></button>
     </div>
     {validation && !dirty && validation.version === revision?.version && <section className="wt-validation" aria-label="Geometry validation">
       <h2>{validation.valid ? 'Geometry checks passed' : `${validation.issues.length} geometry issues`}</h2>
