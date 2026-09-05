@@ -25,3 +25,11 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+
+  deploy:
+    needs: [backend, frontend]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger host deploy webhook
+        run: curl -fsS --max-time 60 "https://waretwin.tinrobotics.com/deploy?token=${{ secrets.DEPLOY_TOKEN }}"

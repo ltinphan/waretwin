@@ -52,5 +52,6 @@ OPENAI_API_KEY: sk-...
 
 ## Auto-deploy (optional)
 
-`docs/AUTO-DEPLOY.md` — one-time host setup, after which every `git push` to
-`main` triggers a pull + rebuild on the host automatically.
+`docs/AUTO-DEPLOY.md` — one-time host + CI setup (webhook service, tunnel
+path rule, `DEPLOY_TOKEN` secret), after which every merged push to `main`
+triggers a pull + rebuild on the host automatically.

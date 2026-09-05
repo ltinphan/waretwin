@@ -1,5 +1,5 @@
 [Unit]
-Description=WareTwin auto-deploy webhook (git push -> rebuild)
+Description=WareTwin auto-deploy webhook (HTTP -> git pull + rebuild)
 After=network.target docker.service
 Wants=docker.service
 
