@@ -28,3 +28,7 @@ uvicorn==0.46.0
 uvloop==0.22.1
 watchfiles==1.2.0
 websockets==17.0.1
+
+# customer-layouts imports (pinned; regenerate lock in clean 3.11 venv on next dep change)
+ezdxf==1.4.4
+pymupdf==1.28.2
