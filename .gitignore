@@ -25,3 +25,5 @@ docs/layout/layout_preview.png
 .DS_Store
 Thumbs.db
 
+frontend/e2e/artifacts/
+frontend/e2e/_probe.spec.ts
