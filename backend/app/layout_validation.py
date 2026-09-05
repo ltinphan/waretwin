@@ -185,14 +185,14 @@ def validate_layout(document: dict, *, robot_clearance_m: float = 0.35,
                     grid_res = build_nav_grid(scaled, fid)
                 except Exception:
                     continue
-            erode_cells = max(1, int(math.ceil(robot_clearance_m / grid_res.cell_size)) - 1)
+            erode_cells = max(0, int(math.ceil(robot_clearance_m / grid_res.cell_size)) - 1)
             cs = grid_res.cell_size
             for c, r in _operational_cells(document, fid, grid_res):
                 ok_here = any(
                     0 <= c2 - e <= c + e < grid_res.cols and 0 <= r2 - e <= r + e < grid_res.rows and \
                     all(grid_res.cells[(r + dr) * grid_res.cols + (c + dc)] == 0
                         for dr in range(-e, e + 1) for dc in range(-e, e + 1))
-                    for e in range(erode_cells, 0, -1)  # ponytail: relaxed erosion: try full then shrink
+                    for e in range(erode_cells, -1, -1)  # ponytail: relaxed erosion: full ring, shrink to 0
                     for c2, r2 in [(c, r)]
                 )
                 if not ok_here:
