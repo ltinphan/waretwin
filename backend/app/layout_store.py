@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .layout_geometry import validate_geometry
+from .layout_validation import validate_layout
 
 
 class LayoutNotFound(LookupError):
@@ -178,6 +179,8 @@ class LayoutStore:
             if draft is None:
                 raise LayoutConflict('Draft changed or does not exist')
             issues = validate_geometry(json.loads(draft['document']))
+            report = validate_layout(json.loads(draft['document']))
+            issues = issues + [dict(i, gate='runtime') for i in report['issues'] if i['severity'] == 'error']
             if issues:
                 raise LayoutInvalid(issues)
             changed = db.execute("""INSERT INTO layout_revisions(id,warehouse_id,state,document)
