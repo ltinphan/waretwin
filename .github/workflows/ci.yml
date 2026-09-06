@@ -36,9 +36,13 @@ jobs:
       - run: bash scripts/webhook-deploy.sh --self-test
 
   deploy:
-    needs: [backend, frontend]
+    needs: [backend, frontend, webhook]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger host deploy webhook
-        run: curl -fsS --max-time 60 "https://waretwin.tinrobotics.com/deploy?token=${{ secrets.DEPLOY_TOKEN }}"
+        env:
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+        run: |
+          TOKEN_QS="$(python -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["DEPLOY_TOKEN"], safe=""))')"
+          curl -fsS --max-time 60 "https://waretwin.tinrobotics.com/deploy?token=${TOKEN_QS}"

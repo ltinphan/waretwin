@@ -29,6 +29,9 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now waretwin-deploy
 ```
 
+`DEPLOY_TOKEN` can be any random secret; the CI deploy job URL-encodes it before
+calling the webhook.
+
 2. Add the Cloudflare Tunnel ingress (before the `http_status:404` catchall).
    On this host cloudflared runs as the `hermes-cloudflared` container
    (config mounted from `/root/.cloudflared/config.yml`), so the webhook on
@@ -74,4 +77,3 @@ tail -f /var/log/waretwin-deploy.log
 - The webhook sends `202 Accepted` and returns; the rebuild runs in the background (see logs). Overlapping triggers are skipped via `flock`.
 - `docker compose up -d --build` rebuilds both containers in place; WS clients reconnect.
 - Optional: `OPENAI_API_KEY` in backend env (docker-compose or backend/.env) enables the live-AI endpoints; app runs fine without it.
-

@@ -3,12 +3,15 @@
 ## Architecture
 
 ```
-Internet → Cloudflare Tunnel (host) → waretwin-frontend:80 (React SPA)
-                                  → waretwin-backend:8000 (FastAPI + WebSocket)
+Internet → Cloudflare Tunnel (hermes-cloudflared container) → waretwin-frontend:80 (React SPA)
+                                                           → waretwin-backend:8000 (FastAPI + WebSocket)
+                                                           → 172.19.0.1:8712 (/deploy webhook on host)
 ```
 
-Cloudflare Tunnel (`cloudflared`) runs on the **host** and handles TLS termination.
-Services join `hermes-net` (`root_hermes-net`) so the tunnel can route by container name.
+Cloudflare Tunnel (`cloudflared`) runs in the `hermes-cloudflared` container and
+handles TLS termination. Services join `hermes-net` (`root_hermes-net`) so the
+tunnel can route to app containers by name, and the `/deploy` webhook on the
+host is reached through the bridge gateway `172.19.0.1`.
 
 ## Quick start
 
@@ -29,9 +32,8 @@ cloudflared tunnel route dns <tunnel-name> waretwin.tinrobotics.com
 #     service: http://robotics-hub-web:80
 #   - service: http_status:404
 
-# 4. Restart cloudflared on the host
-sudo systemctl restart cloudflared
-# or: cloudflared tunnel run <tunnel-name>
+# 4. Restart the cloudflared container
+docker restart hermes-cloudflared
 
 # 5. Verify
 curl https://waretwin.tinrobotics.com/api/health
@@ -55,5 +57,5 @@ OPENAI_API_KEY: sk-...
 `docs/AUTO-DEPLOY.md` — one-time host + CI setup: the `waretwin-deploy`
 systemd webhook listens on host port 8712, the Cloudflare Tunnel exposes
 it at `https://waretwin.tinrobotics.com/deploy`, and the CI deploy job
-(after green backend+frontend checks on pushes to `main`) calls it with
-the `DEPLOY_TOKEN` secret — the host then pulls and rebuilds.
+(after green backend+frontend+webhook checks on pushes to `main`) calls it with
+the URL-encoded `DEPLOY_TOKEN` secret — the host then pulls and rebuilds.

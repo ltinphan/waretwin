@@ -5,14 +5,24 @@
 set -euo pipefail
 
 token_ok() { [[ "$1" == "$2" ]]; }   # exact literal compare (both sides quoted): no glob, no substring
-parse_token() {  # ponytail: no URL-decode; keep DEPLOY_TOKEN URL-safe (alnum) — decode only if tokens ever need reserved chars
-    printf '%s' "$1" | sed -n 's/.*[?&]token=\([^&]*\).*/\1/p'
+url_decode() {
+    local s="${1//+/ }"
+    printf '%b' "${s//%/\\x}"
+}
+parse_token() {
+    local encoded
+    encoded="$(printf '%s' "$1" | sed -n 's/.*[?&]token=\([^&]*\).*/\1/p')"
+    [[ -n "$encoded" ]] || return 0
+    url_decode "$encoded"
 }
 
 self_test() {
     [[ "$(parse_token '/deploy?token=abc')" == abc ]] || return 1
     [[ "$(parse_token '/deploy?x=1&token=abc&y=2')" == abc ]] || return 1
     [[ "$(parse_token '/deploy?token=abc&y=2')" == abc ]] || return 1
+    [[ "$(parse_token '/deploy?token=a%26b')" == 'a&b' ]] || return 1
+    [[ "$(parse_token '/deploy?token=a%20b')" == 'a b' ]] || return 1
+    [[ "$(parse_token '/deploy?token=a%2Ac')" == 'a*c' ]] || return 1
     [[ "$(parse_token '/deploy?tokenx=abc')" == '' ]] || return 1
     [[ "$(parse_token '/deploy')" == '' ]] || return 1
     token_ok abc abc || return 1
