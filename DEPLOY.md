@@ -52,6 +52,8 @@ OPENAI_API_KEY: sk-...
 
 ## Auto-deploy (optional)
 
-`docs/AUTO-DEPLOY.md` — one-time host + CI setup (webhook service, tunnel
-path rule, `DEPLOY_TOKEN` secret), after which every merged push to `main`
-triggers a pull + rebuild on the host automatically.
+`docs/AUTO-DEPLOY.md` — one-time host + CI setup: the `waretwin-deploy`
+systemd webhook listens on host port 8712, the Cloudflare Tunnel exposes
+it at `https://waretwin.tinrobotics.com/deploy`, and the CI deploy job
+(after green backend+frontend checks on pushes to `main`) calls it with
+the `DEPLOY_TOKEN` secret — the host then pulls and rebuilds.

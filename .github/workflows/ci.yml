@@ -29,6 +29,12 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  webhook:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: bash scripts/webhook-deploy.sh --self-test
+
   deploy:
     needs: [backend, frontend]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
