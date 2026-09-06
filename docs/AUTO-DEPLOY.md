@@ -6,7 +6,7 @@ which pulls and rebuilds.
 ```
 git push origin main
   -> GitHub Actions CI (tests)
-  -> deploy job: curl https://waretwin.tinrobotics.com/deploy?token=...
+  -> deploy job: curl -H "X-Deploy-Token: ..." https://waretwin.tinrobotics.com/deploy
        -> Cloudflare Tunnel (path rule ^/deploy$)
             -> host webhook (nc, port 8712)
                  -> git pull --ff-only + docker compose up -d --build
@@ -31,6 +31,7 @@ sudo systemctl enable --now waretwin-deploy
 
 `DEPLOY_TOKEN` can be any random secret (alnum + `-_`); CI sends it in the
 `X-Deploy-Token` header — it never appears in the URL, so access logs can't leak it.
+Cloudflare ingress `path` matching is against the URL path only (query strings are ignored).
 
 2. Add the Cloudflare Tunnel ingress (before the `http_status:404` catchall).
    On this host cloudflared runs as the `hermes-cloudflared` container
