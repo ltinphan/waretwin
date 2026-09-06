@@ -53,11 +53,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     if "--self-test" in sys.argv:
+        if TOKEN:
+            assert authorized("/deploy", TOKEN), "matching header token must deploy"
         assert not authorized("/deploy", ""), "empty token must not pass"
         assert not authorized("/other", "x") or TOKEN == "x", "other paths must not deploy"
         assert not authorized("/deploy?token=x", "x") or TOKEN == "x", "query-string tokens must not pass"
         print("self-test OK (set DEPLOY_TOKEN to test the live decision)")
         sys.exit(0)
-    assert TOKEN, "set DEPLOY_TOKEN (via systemd EnvironmentFile=/etc/waretwin-deploy.env)"
+    assert TOKEN, "set DEPLOY_TOKEN (via systemd Environment=... or /etc/waretwin-deploy.env)"
     log("webhook listening")
     http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
