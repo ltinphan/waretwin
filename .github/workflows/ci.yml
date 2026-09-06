@@ -33,7 +33,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - run: bash scripts/webhook-deploy.sh --self-test
+      - env: { DEPLOY_TOKEN: ci-test-token }
+        run: |
+          bash scripts/webhook-deploy.sh --self-test
+          python3 scripts/webhook-deploy.py --self-test
 
   deploy:
     needs: [backend, frontend, webhook]

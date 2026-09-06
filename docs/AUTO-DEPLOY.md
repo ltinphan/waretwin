@@ -8,7 +8,7 @@ git push origin main
   -> GitHub Actions CI (tests)
   -> deploy job: curl -H "X-Deploy-Token: ..." https://waretwin.tinrobotics.com/deploy
        -> Cloudflare Tunnel (path rule ^/deploy$)
-            -> host webhook (nc, port 8712)
+            -> host webhook (python, port 8712)
                  -> git pull --ff-only + docker compose up -d --build
 ```
 
@@ -20,11 +20,13 @@ git push origin main
 cd /output/waretwin
 git pull
 sudo cp scripts/waretwin-deploy.service /etc/systemd/system/
-# set your token:
+# set your token (either method works):
 sudo systemctl edit waretwin-deploy --stdin << 'UNIT'
 [Service]
 Environment=DEPLOY_TOKEN=<random-string>
 UNIT
+# or:
+# echo 'DEPLOY_TOKEN=<random-string>' | sudo tee /etc/waretwin-deploy.env >/dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable --now waretwin-deploy
 ```
