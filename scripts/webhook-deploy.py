@@ -31,6 +31,9 @@ def deploy_async():
             for cmd in (["git", "pull", "--ff-only"], ["docker", "compose", "up", "-d", "--build"]):
                 r = subprocess.run(cmd, cwd=REPO_DIR, capture_output=True, text=True)
                 log(f"$ {' '.join(cmd)} rc={r.returncode}" + (f"\n{r.stdout}{r.stderr}" if r.returncode else ""))
+                if r.returncode:
+                    log("=== deploy failed ===")
+                    return
             time.sleep(5)
             r = subprocess.run(["docker", "inspect", "-f", "{{.Name}} {{.State.Status}}",
                                 "waretwin-backend", "waretwin-frontend"], capture_output=True, text=True)
