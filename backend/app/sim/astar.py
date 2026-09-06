@@ -23,6 +23,7 @@ class NavGrid:
     cols: int
     rows: int
     cells: bytearray  # row-major
+    cell_size: float = 1.0
 
 
 def is_walkable(grid: NavGrid, c: int, r: int, blocked: Optional[set[Cell]] = None) -> bool:
@@ -114,7 +115,7 @@ def cell_center(c: Cell, cell_size: float = 1.0) -> tuple[float, float]:
 
 
 def nearest_walkable(grid: NavGrid, x: float, z: float, blocked: Optional[set[Cell]] = None) -> Cell:
-    c0, r0 = to_cell(x, z)
+    c0, r0 = to_cell(x, z, grid.cell_size)
     if is_walkable(grid, c0, r0, blocked):
         return (c0, r0)
     for rad in range(1, 8):

@@ -279,9 +279,13 @@ export interface LiftState {
   y: number;
   door_f1: "OPEN" | "CLOSED";
   door_f2: "OPEN" | "CLOSED";
+  /** 每層門狀態（樓層數 > 2 用；key = 樓層字串。door_f1/f2 為相容保留欄位） */
+  door_state?: Record<string, "OPEN" | "CLOSED">;
+  /** 本次行程出發層的平台高度（y 插值用；舊快照無此欄位時以 elevOf(1) 回退） */
+  y0?: number;
   occupant: RobotId | null;
   reserved_by: RobotId | null;
-  /** 各樓層排隊（FIFO），key = "1" | "2" */
+  /** 各樓層排隊（FIFO），key = 樓層字串 */
   queue: Record<string, RobotId[]>;
   until_tick: number;
   fault: boolean;

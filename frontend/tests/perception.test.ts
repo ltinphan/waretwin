@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { SimEngine, SIM } from "../src/simulation/engine";
 import layoutJson from "../src/layout/warehouse_layout.json";
 describe("perception", () => {
-  it("keeps following robots >= PERC_STOP apart and reports obstacles", () => {
+  it("keeps following robots >= PERC_STOP apart and reports obstacles", { timeout: 20_000 }, () => {  // ponytail: 6000 sim steps ~= 4.5s solo; 5s default flakes under parallel load
     const eng = new SimEngine(layoutJson as never, { seed: 42 });
     let minD = 9, stops = 0, slows = 0, seen = 0;
     for (let t = 0; t < 6000; t++) {

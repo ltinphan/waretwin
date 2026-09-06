@@ -39,6 +39,7 @@ from .sim.engine import SimEngine, SIM
 from .sim.whatif import run_whatif
 from .sim.fleet_sizing import run_fleet_sizing
 from .sim.navgrid import load_layout
+from .layout_api import router as layout_router
 
 log = logging.getLogger("twin")
 TICK_S = SIM["TICK_S"]
@@ -330,6 +331,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AI Autonomous Warehouse Digital Twin", version="0.3.0", lifespan=lifespan)
+app.include_router(layout_router)
 # CORS：本機開發預設全開；部署時用 TWIN_CORS_ORIGINS 設定前端網域（逗號分隔），例如 https://your-app.vercel.app
 _origins = [o.strip() for o in os.environ.get("TWIN_CORS_ORIGINS", "*").split(",") if o.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=_origins, allow_origin_regex=os.environ.get("TWIN_CORS_REGEX") or None, allow_methods=["*"], allow_headers=["*"])

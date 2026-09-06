@@ -5,3 +5,9 @@ pydantic>=2.7,<3
 websockets>=12,<18
 openai>=1.40,<4
 python-dotenv>=1.0,<2
+shapely==2.1.2
+
+# customer-layouts imports (pinned; regenerate lock in clean 3.11 venv on next dep change)
+ezdxf==1.4.4
+pymupdf==1.28.2
+python-multipart

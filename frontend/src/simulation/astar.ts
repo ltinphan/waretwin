@@ -8,7 +8,7 @@
  */
 import type { GridCell } from "../schema/twin_state";
 
-export interface NavGrid { cols: number; rows: number; cells: Uint8Array }
+export interface NavGrid { cols: number; rows: number; cells: Uint8Array; cellSize?: number }
 
 const SQRT2 = Math.SQRT2;
 const DIRS: Array<[number, number, number]> = [
@@ -92,7 +92,7 @@ export function cellCenter(c: GridCell, cellSize = 1): [number, number] { return
 
 /** 找離 (x,z) 最近的可通行格（access point 落在牆上時的保險） */
 export function nearestWalkable(grid: NavGrid, x: number, z: number, blocked?: Set<string>): GridCell {
-  const [c0, r0] = toCell(x, z);
+  const [c0, r0] = toCell(x, z, grid.cellSize ?? 1);
   if (isWalkable(grid, c0, r0, blocked)) return [c0, r0];
   for (let rad = 1; rad < 8; rad++) {
     for (let dr = -rad; dr <= rad; dr++) for (let dc = -rad; dc <= rad; dc++) {
