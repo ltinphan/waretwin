@@ -28,3 +28,21 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+
+  webhook:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: bash scripts/webhook-deploy.sh --self-test
+
+  deploy:
+    needs: [backend, frontend, webhook]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Trigger host deploy webhook
+        env:
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}   # header, never the URL (keeps it out of access logs)
+        run: |
+          curl -fsS --max-time 60 -H "X-Deploy-Token: ${DEPLOY_TOKEN}" https://waretwin.tinrobotics.com/deploy

@@ -1,0 +1,13 @@
+[Unit]
+Description=WareTwin auto-deploy webhook (HTTP -> git pull + rebuild)
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+ExecStart=/usr/bin/bash /output/waretwin/scripts/webhook-deploy.sh
+Restart=always
+RestartSec=3
+# Environment=DEPLOY_TOKEN=<random-string>   <- set via systemctl edit
+
+[Install]
+WantedBy=multi-user.target
