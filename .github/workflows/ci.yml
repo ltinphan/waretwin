@@ -39,6 +39,7 @@ jobs:
     needs: [backend, frontend, webhook]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions: {}
     steps:
       - name: Trigger host deploy webhook
         env:
