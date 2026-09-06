@@ -59,7 +59,7 @@ while true; do
     REQ_LINE=""
     IFS= read -r -t 10 REQ_LINE <&"$NC_IN" || sleep 1   # -t 10: silent client can't hang us; sleep: no tight loop if nc died
     HEADERS=""
-    while IFS= read -r -t 5 LINE <&"$NC_IN" && [[ -n "$LINE" ]]; do HEADERS+="$LINE"$'\n'; done   # token rides X-Deploy-Token, never the URL
+    while IFS= read -r -t 5 LINE <&"$NC_IN"; do LINE="${LINE%$'\r'}"; [[ -n "$LINE" ]] || break; HEADERS+="$LINE"$'\n'; done   # token rides X-Deploy-Token, never the URL
     GOT="$(header_token "$HEADERS")"
 
     if authorize "$(get_path "$REQ_LINE")" "$GOT" "$TOKEN"; then
