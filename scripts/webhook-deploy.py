@@ -13,6 +13,9 @@ LOG = os.environ.get("DEPLOY_LOG", "/var/log/waretwin-deploy.log")
 LOCK = os.environ.get("DEPLOY_LOCK", "/run/waretwin-deploy.lock")
 
 def log(msg):
+    log_dir = os.path.dirname(LOG)
+    if log_dir:
+        os.makedirs(log_dir, exist_ok=True)
     with open(LOG, "a") as f:
         f.write(f"[{time.strftime('%F %T%z')}] {msg}\n")
 
