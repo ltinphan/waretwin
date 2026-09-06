@@ -29,8 +29,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now waretwin-deploy
 ```
 
-`DEPLOY_TOKEN` can be any random secret; the CI deploy job URL-encodes it before
-calling the webhook.
+`DEPLOY_TOKEN` can be any random secret (alnum + `-_`); CI sends it in the
+`X-Deploy-Token` header — it never appears in the URL, so access logs can't leak it.
 
 2. Add the Cloudflare Tunnel ingress (before the `http_status:404` catchall).
    On this host cloudflared runs as the `hermes-cloudflared` container
@@ -61,7 +61,7 @@ git push origin main        # CI green -> webhook -> host pulls + rebuilds
 Or manually on the host:
 
 ```bash
-curl "http://localhost:8712/deploy?token=<DEPLOY_TOKEN>"
+curl -H "X-Deploy-Token: <DEPLOY_TOKEN>" http://localhost:8712/deploy
 # or: cd /output/waretwin && docker compose up -d --build
 ```
 

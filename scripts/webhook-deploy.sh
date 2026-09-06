@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # WareTwin auto-deploy webhook - run on the host as a systemd service.
-# GET /deploy?token=$DEPLOY_TOKEN -> git pull + docker compose up -d --build
+# GET /deploy with X-Deploy-Token header == $DEPLOY_TOKEN -> git pull + docker compose up -d --build
 # Netcat one-shot server: nothing to install beyond bash+nc.
 set -euo pipefail
 
@@ -11,28 +11,19 @@ get_path() {  # path of "GET /deploy?token=x HTTP/1.1" -> /deploy
 authorize() {  # <path> <got-token> <want-token>: only /deploy, alnum token, exact match
     [[ "$1" == "/deploy" && "$2" =~ ^[A-Za-z0-9_-]+$ ]] && token_ok "$2" "$3"
 }
-url_decode() {
-    local s="${1//+/ }"
-    printf '%b' "${s//%/\\x}"
-}
-parse_token() {
-    local encoded
-    encoded="$(printf '%s' "$1" | sed -n 's/.*[?&]token=\([^&]*\).*/\1/p')"
-    [[ -n "$encoded" ]] || return 0
-    url_decode "$encoded"
+header_token() {  # <header-lines>: value of X-Deploy-Token (single occurrence, CRLF-safe)
+    printf '%s' "$1" | sed -n 's/^[Xx]-[Dd]eploy-[Tt]oken:[[:space:]]*//p' | tail -1 | tr -d '\r'
 }
 
 self_test() {
-    [[ "$(parse_token '/deploy?token=abc')" == abc ]] || return 1
-    [[ "$(parse_token '/deploy?x=1&token=abc&y=2')" == abc ]] || return 1
-    [[ "$(parse_token '/deploy?token=abc&y=2')" == abc ]] || return 1
-    [[ "$(parse_token '/deploy?token=a%26b')" == 'a&b' ]] || return 1
-    [[ "$(parse_token '/deploy?token=a%20b')" == 'a b' ]] || return 1
-    [[ "$(parse_token '/deploy?token=a%2Ac')" == 'a*c' ]] || return 1
-    [[ "$(parse_token '/deploy?tokenx=abc')" == '' ]] || return 1
-    [[ "$(parse_token '/deploy')" == '' ]] || return 1
-    [[ "$(get_path 'GET /deploy?token=abc HTTP/1.1')" == /deploy ]] || return 1
-    [[ "$(get_path 'GET /foo?token=abc HTTP/1.1')" == /foo ]] || return 1
+    [[ "$(header_token $'Host: h\r\nX-Deploy-Token: abc\r\n')" == abc ]] || return 1
+    [[ "$(header_token $'X-Deploy-Token: a-b_1\r')" == a-b_1 ]] || return 1
+    [[ "$(header_token $'Host: h\r\nx-deploy-token: abc')" == abc ]] || return 1
+    [[ "$(header_token $'Host: h\r\nX-Deploy-Tokenx: abc')" == '' ]] || return 1
+    [[ "$(header_token $'Host: h')" == '' ]] || return 1
+    [[ "$(header_token '')" == '' ]] || return 1
+    [[ "$(get_path 'GET /deploy HTTP/1.1')" == /deploy ]] || return 1
+    [[ "$(get_path 'GET /foo HTTP/1.1')" == /foo ]] || return 1
     authorize /deploy abc abc || return 1
     authorize /foo abc abc && return 1      # only /deploy routes deploys
     authorize /deploy 'a*b' 'a*b' && return 1  # charset gate (tokens are alnum; rotate accordingly)
@@ -44,6 +35,7 @@ self_test() {
     token_ok '' abc && return 1        # empty never matches
     return 0
 }
+
 
 if [[ "${1:-}" == "--self-test" ]]; then self_test; echo "self-test OK"; exit 0; fi
 
@@ -66,8 +58,9 @@ while true; do
 
     REQ_LINE=""
     IFS= read -r -t 10 REQ_LINE <&"$NC_IN" || sleep 1   # -t 10: silent client can't hang us; sleep: no tight loop if nc died
-    URL="${REQ_LINE#GET }"; URL="${URL% HTTP/*}"
-    GOT="$(parse_token "$URL")"
+    HEADERS=""
+    while IFS= read -r -t 5 LINE && [[ -n "$LINE" ]]; do HEADERS+="$LINE"$'\n'; done   # token rides X-Deploy-Token, never the URL
+    GOT="$(header_token "$HEADERS")"
 
     if authorize "$(get_path "$REQ_LINE")" "$GOT" "$TOKEN"; then
         respond "202 Accepted" "$NC_OUT"
