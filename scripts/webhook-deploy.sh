@@ -5,6 +5,12 @@
 set -euo pipefail
 
 token_ok() { [[ "$1" == "$2" ]]; }   # exact literal compare (both sides quoted): no glob, no substring
+get_path() {  # path of "GET /deploy?token=x HTTP/1.1" -> /deploy
+    local p="${1#GET }"; p="${p%%\?*}"; p="${p% HTTP/*}"; printf '%s' "$p"
+}
+authorize() {  # <path> <got-token> <want-token>: only /deploy, alnum token, exact match
+    [[ "$1" == "/deploy" && "$2" =~ ^[A-Za-z0-9_-]+$ ]] && token_ok "$2" "$3"
+}
 url_decode() {
     local s="${1//+/ }"
     printf '%b' "${s//%/\\x}"
@@ -25,6 +31,12 @@ self_test() {
     [[ "$(parse_token '/deploy?token=a%2Ac')" == 'a*c' ]] || return 1
     [[ "$(parse_token '/deploy?tokenx=abc')" == '' ]] || return 1
     [[ "$(parse_token '/deploy')" == '' ]] || return 1
+    [[ "$(get_path 'GET /deploy?token=abc HTTP/1.1')" == /deploy ]] || return 1
+    [[ "$(get_path 'GET /foo?token=abc HTTP/1.1')" == /foo ]] || return 1
+    authorize /deploy abc abc || return 1
+    authorize /foo abc abc && return 1      # only /deploy routes deploys
+    authorize /deploy 'a*b' 'a*b' && return 1  # charset gate (tokens are alnum; rotate accordingly)
+    authorize '' abc abc && return 1
     token_ok abc abc || return 1
     token_ok 'a*c' 'a*c' || return 1
     token_ok axxxc 'a*c' && return 1   # glob chars must not match
@@ -40,7 +52,7 @@ TOKEN="${DEPLOY_TOKEN:?set DEPLOY_TOKEN}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${DEPLOY_DIR:-$(dirname "$SCRIPT_DIR")}"
 LOG="${DEPLOY_LOG:-/var/log/waretwin-deploy.log}"
-LOCK="/tmp/waretwin-deploy.lock"
+LOCK="${DEPLOY_LOCK:-/run/waretwin-deploy.lock}"   # ponytail: root-only /run, not world-writable /tmp
 
 mkdir -p "$(dirname "$LOG")"
 
@@ -57,7 +69,7 @@ while true; do
     URL="${REQ_LINE#GET }"; URL="${URL% HTTP/*}"
     GOT="$(parse_token "$URL")"
 
-    if token_ok "$GOT" "$TOKEN"; then
+    if authorize "$(get_path "$REQ_LINE")" "$GOT" "$TOKEN"; then
         respond "202 Accepted" "$NC_OUT"
         echo "[$(date -Is)] deploy triggered" >> "$LOG"
         (
