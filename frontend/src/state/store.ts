@@ -10,9 +10,14 @@ export type SceneTool = "select" | "pan" | "paths" | "labels" | "measure";
 const demoLayout = layoutJson as unknown as WarehouseLayout;
 /** Active layout: demo JSON until a published customer layout is opened. */
 export let layout = demoLayout;
+try {
+  const saved = sessionStorage.getItem("wt_layout");
+  if (saved) layout = JSON.parse(saved) as WarehouseLayout;
+} catch { /* corrupted entry -> demo layout */ }
 /** Swap the active layout (workspace "Open in demo"); callers re-derive via resetEngine. */
 export function setLayout(next: WarehouseLayout) {
   layout = next;
+  try { sessionStorage.setItem("wt_layout", JSON.stringify(next)); } catch { /* private mode: handoff won't survive reload */ }
   useStore.setState({ locations: Object.fromEntries(next.locations.map((l) => [l.id, l])) });
 }
 

@@ -346,7 +346,7 @@ class LiftState(_Base):
     y0: float = 0                        # 本次行程出發層平台高度（y 插值用）
     occupant: Optional[RobotId] = None
     reserved_by: Optional[RobotId] = None
-    queue: dict[str, list[RobotId]] = Field(default_factory=lambda: {"1": [], "2": []})
+    queue: dict[str, list[RobotId]] = Field(default_factory=dict)  # engine populates per-floor keys at lift init
     until_tick: int = 0
     fault: bool = False
     fault_remaining: int = 0             # 故障當下凍結的剩餘動作 ticks；解除時從這裡續跑（平台不瞬移）

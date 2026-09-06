@@ -58,8 +58,8 @@ describe('physical navigation geometry',()=>{
     cases.push({layout:partial,floor:1},{layout:partial,floor:99});
     const upper=empty(); upper.floors.push({id:2,name:'Upper',elevation:5});
     cases.push({layout:upper,floor:2});
-    const backend=resolve('../backend'), venv=resolve(backend,'.venv/bin/python');
-    const python=process.env.PYTHON ?? (existsSync(venv)?venv:'python3');
+    const backend=resolve('../backend'), venv=['.venv/bin/python','.venv311/bin/python'].map((r)=>resolve(backend,r)).find((c)=>existsSync(c));
+    const python=process.env.PYTHON ?? (venv?venv:'python3');
     const result=spawnSync(python,['-m','tests.navgrid_bridge'],{cwd:backend,input:JSON.stringify(cases),encoding:'utf8',timeout:30000});
     expect(result.status,result.stderr).toBe(0);
     const masks=JSON.parse(result.stdout);

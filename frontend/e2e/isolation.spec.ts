@@ -67,9 +67,13 @@ test("T3 cross-tenant write/publish blocked: 404 both, A revision unchanged", as
 });
 
 test("T4 fork isolation: A forks; B sees no new revision on A's warehouse", async ({ request }) => {
+  const H = { headers: { Authorization: "Bearer " + A.token } };
+  // count BEFORE the fork — the scratch DB persists across runs, so never assume 1 revision
+  const before = await request.get(`/api/workspace/warehouses/${A.warehouse_id}/revisions`, H);
+  const n0 = (await before.json()).length;
   const fork = await request.post(
     `/api/workspace/warehouses/${A.warehouse_id}/revisions/${A.revision_id}/fork`,
-    { headers: { Authorization: "Bearer " + A.token } }
+    H
   );
   expect(fork.status()).toBe(201);
   const forked = await fork.json();
@@ -79,11 +83,9 @@ test("T4 fork isolation: A forks; B sees no new revision on A's warehouse", asyn
     { headers: { Authorization: "Bearer " + B.token } }
   );
   expect(leaked.status()).toBe(404);
-  // A still reads both revisions
-  const list = await request.get(`/api/workspace/warehouses/${A.warehouse_id}/revisions`, {
-    headers: { Authorization: "Bearer " + A.token },
-  });
-  expect((await list.json()).length).toBe(2);
+  // A sees exactly one new revision after the fork
+  const list = await request.get(`/api/workspace/warehouses/${A.warehouse_id}/revisions`, H);
+  expect((await list.json()).length).toBe(n0 + 1);
 });
 
 test("T5 revocation kills only the revoked token", async ({ request }) => {

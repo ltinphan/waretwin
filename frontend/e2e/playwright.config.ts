@@ -3,6 +3,7 @@
 // 8000 is occupied by an unrelated docker container, so the e2e vite config
 // proxies /api to 8001 instead of the 8000 hardcoded in vite.config.ts).
 import { defineConfig, devices } from "@playwright/test";
+import { existsSync } from "node:fs";
 
 const E2E_DIR = import.meta.dirname;        // frontend/e2e (specs + artifacts)
 const FRONTEND_DIR = E2E_DIR + "/..";      // frontend (vite dev cwd)
@@ -30,8 +31,11 @@ export default defineConfig({
     },
     {
       command:
+        // fresh scratch DBs per e2e run — exact-count assertions need a pristine state
+        "rm -f /tmp/e2e_l.db /tmp/e2e_t.db && " +
         "cd backend && TWIN_LAYOUT_DB=/tmp/e2e_l.db TWIN_DB=/tmp/e2e_t.db " +
-        ".venv311/bin/python -m uvicorn app.main:app --port 8001",
+        (existsSync(REPO_DIR + "/backend/.venv311/bin/python") ? ".venv311/bin/python" : "python3") +
+        " -m uvicorn app.main:app --port 8001",
       cwd: REPO_DIR,
       url: "http://127.0.0.1:8001/api/health",
       timeout: 120_000,

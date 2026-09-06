@@ -1,10 +1,11 @@
 // Shared helpers for the workspace e2e specs.
 import { execSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { expect } from "@playwright/test";
 import * as path from "node:path";
 
 const REPO = path.resolve(import.meta.dirname, "../../..");
-const PY = path.join(REPO, "backend/.venv311/bin/python");
+const PY = ["backend/.venv311/bin/python", "python3"].map((rel) => path.join(REPO, rel)).find((cand) => existsSync(cand)) ?? "python3";
 const PROVISION = path.join(REPO, "frontend/e2e/helpers/provision.py");
 
 export interface Provisioned {
